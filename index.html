@@ -15,7 +15,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Playfair+Display:wght@700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onerror="console.warn('Supabase not loaded')"></script>
 <style>
 /* ===== THEMES ===== */
 :root {
@@ -987,14 +987,25 @@ const THEMES = [
 
 // ===== INIT =====
 window.onload = async () => {
-  loadSettings();
-  const cfg = getSupabaseConfig();
-  if (cfg && !demoMode) {
-    await initSupabase(cfg.url, cfg.key);
-    showApp();
-  } else if (demoMode) {
-    showApp();
-  } else {
+  try {
+    loadSettings();
+    const cfg = getSupabaseConfig();
+    if (demoMode) {
+      showApp();
+    } else if (cfg) {
+      try {
+        await initSupabase(cfg.url, cfg.key);
+        showApp();
+      } catch(e) {
+        console.error('Supabase init failed:', e);
+        showApp(); // show app anyway, just without cloud sync
+      }
+    } else {
+      document.getElementById('setup-screen').style.display = 'flex';
+    }
+  } catch(e) {
+    console.error('Init error:', e);
+    // fallback: show setup screen
     document.getElementById('setup-screen').style.display = 'flex';
   }
 };
@@ -1020,6 +1031,7 @@ function getSupabaseConfig() {
 
 async function initSupabase(url, key) {
   try {
+    if (!window.supabase) throw new Error("Supabase library not loaded");
     supabase = window.supabase.createClient(url, key);
     localStorage.setItem('supabase_url', url);
     localStorage.setItem('supabase_key', key);
