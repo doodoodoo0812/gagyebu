@@ -942,7 +942,7 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
 
 <script>
 // ===== DATA & STATE =====
-let supabase = null;
+let sbClient = null;
 let demoMode = false;
 let currentMonth = new Date().getMonth();
 let currentYear = new Date().getFullYear();
@@ -1032,7 +1032,7 @@ function getSupabaseConfig() {
 async function initSupabase(url, key) {
   try {
     if (!window.supabase) throw new Error("Supabase library not loaded");
-    supabase = window.supabase.createClient(url, key);
+    sbClient = window.supabase.createClient(url, key);
     localStorage.setItem('supabase_url', url);
     localStorage.setItem('supabase_key', key);
     document.getElementById('supabase-status').textContent = '연결됨: ' + url.split('//')[1]?.split('.')[0];
@@ -1128,16 +1128,16 @@ async function loadData() {
   if (demoMode) {
     transactions = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
     budgets = JSON.parse(localStorage.getItem('budgets_demo') || '[]');
-  } else if (supabase) {
+  } else if (sbClient) {
     const monthStr = getMonthStr();
     const prevMonthStr = getPrevMonthStr();
-    const { data: tx } = await supabase.from('transactions')
+    const { data: tx } = await sbClient.from('transactions')
       .select('*')
       .gte('date', prevMonthStr + '-01')
       .lte('date', monthStr + '-31')
       .order('date', { ascending: false });
     transactions = tx || [];
-    const { data: bud } = await supabase.from('budgets').select('*').eq('month', monthStr);
+    const { data: bud } = await sbClient.from('budgets').select('*').eq('month', monthStr);
     budgets = bud || [];
   }
   applyRecurring();
@@ -1541,7 +1541,7 @@ async function saveTransaction() {
   if (!selectedCategory) { showToast('카테고리를 선택해 주세요'); return; }
 
   let photoUrl = null;
-  if (selectedPhotoBase64 && !demoMode && supabase) {
+  if (selectedPhotoBase64 && !demoMode && sbClient) {
     // Upload photo to Supabase storage (optional, if bucket set up)
     photoUrl = selectedPhotoBase64.slice(0, 100); // store thumbnail indicator
   } else if (selectedPhotoBase64) {
@@ -1564,11 +1564,11 @@ async function saveTransaction() {
     }
     localStorage.setItem('transactions_demo', JSON.stringify(stored));
     transactions = stored;
-  } else if (supabase) {
+  } else if (sbClient) {
     if (currentEditTx) {
-      await supabase.from('transactions').update(tx).eq('id', currentEditTx.id);
+      await sbClient.from('transactions').update(tx).eq('id', currentEditTx.id);
     } else {
-      await supabase.from('transactions').insert([tx]);
+      await sbClient.from('transactions').insert([tx]);
     }
     await loadData();
   }
@@ -1668,8 +1668,8 @@ async function deleteCurrentTx() {
     stored = stored.filter(t=>t.id!==currentEditTx.id);
     localStorage.setItem('transactions_demo', JSON.stringify(stored));
     transactions = stored;
-  } else if (supabase) {
-    await supabase.from('transactions').delete().eq('id', currentEditTx.id);
+  } else if (sbClient) {
+    await sbClient.from('transactions').delete().eq('id', currentEditTx.id);
     await loadData();
   }
   closeModal('detail-modal');
@@ -1695,9 +1695,9 @@ async function saveBudget() {
     if (idx>-1) stored[idx] = bud; else stored.push(bud);
     localStorage.setItem('budgets_demo', JSON.stringify(stored));
     budgets = stored;
-  } else if (supabase) {
-    await supabase.from('budgets').upsert([bud], { onConflict: 'month,category' });
-    const { data } = await supabase.from('budgets').select('*').eq('month', monthStr);
+  } else if (sbClient) {
+    await sbClient.from('budgets').upsert([bud], { onConflict: 'month,category' });
+    const { data } = await sbClient.from('budgets').select('*').eq('month', monthStr);
     budgets = data || [];
   }
   closeModal('budget-modal');
@@ -1740,8 +1740,8 @@ function applyRecurring() {
         const stored = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
         stored.push({ ...tx, id: 'rec_' + Date.now() + Math.random() });
         localStorage.setItem('transactions_demo', JSON.stringify(stored));
-      } else if (supabase) {
-        await supabase.from('transactions').insert([tx]);
+      } else if (sbClient) {
+        await sbClient.from('transactions').insert([tx]);
       }
     }
   });
