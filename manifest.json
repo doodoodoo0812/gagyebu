@@ -1,0 +1,21 @@
+{
+  "name": "우리집 가계부",
+  "short_name": "가계부",
+  "description": "부부 공유 스마트 가계부",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1628",
+  "theme_color": "#0f1628",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='40' fill='%230f1628'/><text y='130' x='96' text-anchor='middle' font-size='100'>💰</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "productivity"],
+  "lang": "ko",
+  "dir": "ltr"
+}
