@@ -534,11 +534,11 @@ body {
   <div class="setup-card" style="margin-top:-4px">
     <div class="form-group">
       <label class="form-label">Supabase URL</label>
-      <input class="form-input" id="setup-url" placeholder="https://xxxx.supabase.co" type="url">
+      <input class="form-input" id="setup-url" placeholder="https://xxxx.supabase.co" type="text">
     </div>
     <div class="form-group">
       <label class="form-label">Supabase Anon Key</label>
-      <input class="form-input" id="setup-key" placeholder="eyJhbGci..." type="password">
+      <input class="form-input" id="setup-key" placeholder="eyJhbGci..." type="text">
     </div>
     <div class="form-group">
       <label class="form-label">내 이름 (표시용)</label>
@@ -1059,16 +1059,28 @@ function showApp() {
 }
 
 async function saveSupabaseConfig() {
-  const url = document.getElementById('setup-url').value.trim();
-  const key = document.getElementById('setup-key').value.trim();
-  const name = document.getElementById('setup-name').value.trim();
-  if (!url || !key) { showToast('URL과 Key를 입력해 주세요'); return; }
-  if (name) { localStorage.setItem('userName', name); }
-  localStorage.setItem('demoMode', 'false');
-  demoMode = false;
-  const ok = await initSupabase(url, key);
-  if (ok) { showToast('✅ 연결 성공!'); showApp(); }
-  else { showToast('❌ 연결 실패. URL과 Key를 확인해 주세요'); }
+  try {
+    const url = document.getElementById('setup-url').value.trim();
+    const key = document.getElementById('setup-key').value.trim();
+    const name = document.getElementById('setup-name').value.trim();
+    console.log('saveSupabaseConfig called', url ? 'url ok' : 'url empty', key ? 'key ok' : 'key empty');
+    if (!url) { alert('Supabase URL을 입력해 주세요'); return; }
+    if (!key) { alert('Supabase Anon Key를 입력해 주세요'); return; }
+    if (name) { localStorage.setItem('userName', name); }
+    localStorage.setItem('demoMode', 'false');
+    demoMode = false;
+    const ok = await initSupabase(url, key);
+    console.log('initSupabase result:', ok);
+    if (ok) {
+      alert('✅ 연결 성공! 앱을 시작합니다.');
+      showApp();
+    } else {
+      alert('❌ 연결 실패. URL과 Key를 다시 확인해 주세요.');
+    }
+  } catch(e) {
+    console.error('saveSupabaseConfig error:', e);
+    alert('오류 발생: ' + e.message);
+  }
 }
 
 function useDemoMode() {
@@ -1100,9 +1112,10 @@ function useDemoMode() {
   ]));
   try {
     showApp();
+    console.log('useDemoMode: showApp called successfully');
   } catch(e) {
     console.error('showApp error:', e);
-    alert('오류: ' + e.message);
+    alert('앱 로드 오류: ' + e.message);
   }
 }
 
