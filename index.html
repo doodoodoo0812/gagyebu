@@ -13,9 +13,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Playfair+Display:wght@700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onerror="console.warn('Supabase not loaded')"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer onerror="console.warn('Supabase not loaded')"></script>
 <style>
 /* ===== THEMES ===== */
 :root {
@@ -988,6 +988,7 @@ const THEMES = [
 // ===== INIT =====
 async function initApp() {
   try {
+    initModalBackdrops();
     loadSettings();
     const cfg = getSupabaseConfig();
     if (demoMode) {
@@ -1007,7 +1008,7 @@ async function initApp() {
   }
 }
 
-window.onload = () => { setTimeout(initApp, 100); };
+document.addEventListener("DOMContentLoaded", () => { setTimeout(initApp, 300); });
 
 function loadSettings() {
   const theme = localStorage.getItem('theme') || 'navy';
@@ -1046,6 +1047,7 @@ function showApp() {
   try {
     document.getElementById('setup-screen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
+    initModalBackdrops();
     renderCategoryGrid('expense');
     renderCategoryGrids();
     updateMonthLabel();
@@ -1458,11 +1460,12 @@ function openThemeModal() { openModal('theme-modal'); renderThemeGrids(); }
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-window.addEventListener('DOMContentLoaded', () => {
+// Modal backdrop click to close (runs after DOM ready)
+function initModalBackdrops() {
   document.querySelectorAll('.modal-backdrop').forEach(b => {
     b.addEventListener('click', e => { if (e.target === b) b.classList.remove('open'); });
   });
-});
+}
 
 let currentTxType = 'expense';
 let selectedCategory = '';
