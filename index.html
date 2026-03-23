@@ -517,7 +517,7 @@ body {
 </head>
 <body data-theme="navy">
 
-<div id="setup-screen" class="setup-screen" style="display:none;">
+<div id="setup-screen" class="setup-screen">
   <div class="setup-logo">💰 가계부</div>
   <p style="font-size:18px;font-weight:700;color:var(--text);">Supabase 연동 설정</p>
   <p class="setup-sub">부부 공유를 위해 Supabase 프로젝트 정보를 입력해 주세요.<br>한 번만 설정하면 됩니다!</p>
@@ -986,7 +986,7 @@ const THEMES = [
 ];
 
 // ===== INIT =====
-window.onload = async () => {
+async function initApp() {
   try {
     loadSettings();
     const cfg = getSupabaseConfig();
@@ -998,17 +998,16 @@ window.onload = async () => {
         showApp();
       } catch(e) {
         console.error('Supabase init failed:', e);
-        showApp(); // show app anyway, just without cloud sync
+        showApp();
       }
-    } else {
-      document.getElementById('setup-screen').style.display = 'flex';
     }
+    // setup-screen is already visible by default if no config
   } catch(e) {
     console.error('Init error:', e);
-    // fallback: show setup screen
-    document.getElementById('setup-screen').style.display = 'flex';
   }
-};
+}
+
+window.onload = () => { setTimeout(initApp, 100); };
 
 function loadSettings() {
   const theme = localStorage.getItem('theme') || 'navy';
