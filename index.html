@@ -1065,14 +1065,12 @@ async function saveSupabaseConfig() {
     const url = document.getElementById('setup-url').value.trim();
     const key = document.getElementById('setup-key').value.trim();
     const name = document.getElementById('setup-name').value.trim();
-    console.log('saveSupabaseConfig called', url ? 'url ok' : 'url empty', key ? 'key ok' : 'key empty');
     if (!url) { alert('Supabase URL을 입력해 주세요'); return; }
     if (!key) { alert('Supabase Anon Key를 입력해 주세요'); return; }
     if (name) { localStorage.setItem('userName', name); }
     localStorage.setItem('demoMode', 'false');
     demoMode = false;
     const ok = await initSupabase(url, key);
-    console.log('initSupabase result:', ok);
     if (ok) {
       alert('✅ 연결 성공! 앱을 시작합니다.');
       showApp();
@@ -1114,7 +1112,6 @@ function useDemoMode() {
   ]));
   try {
     showApp();
-    console.log('useDemoMode: showApp called successfully');
   } catch(e) {
     console.error('showApp error:', e);
     alert('앱 로드 오류: ' + e.message);
@@ -1143,6 +1140,7 @@ async function loadData() {
     const { data: bud } = await supabase.from('budgets').select('*').eq('month', monthStr);
     budgets = bud || [];
   }
+  applyRecurring();
   renderAll();
 }
 
@@ -1638,7 +1636,6 @@ async function analyzeReceiptWithAI(base64) {
       document.getElementById('ai-result').innerHTML = `<div style="font-size:11px;color:var(--accent);margin-bottom:4px">✨ AI 인식 완료 — 확인 후 수정하세요</div>`;
     }
   } catch(e) {
-    console.log('AI 분석 실패 (API key 필요):', e);
   }
   document.getElementById('ai-loading').style.display = 'none';
 }
