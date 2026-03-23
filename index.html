@@ -1068,24 +1068,28 @@ function useDemoMode() {
   localStorage.setItem('demoMode', 'true');
   demoMode = true;
   // seed demo data
+  const nowY = new Date().getFullYear();
+  const nowM = String(new Date().getMonth()+1).padStart(2,'0');
+  const d = (day) => nowY + '-' + nowM + '-' + String(day).padStart(2,'0');
   const demo = [
-    { id:'d1', date:'2025-03-01', type:'income', category:'급여', name:'3월 급여', amount:3500000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d2', date:'2025-03-02', type:'expense', category:'마트', name:'이마트 장보기', amount:87000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d3', date:'2025-03-05', type:'expense', category:'관리비', name:'아파트 관리비', amount:150000, memo:'', user_name:'아내', is_recurring:true },
-    { id:'d4', date:'2025-03-08', type:'expense', category:'식비', name:'외식 (이탈리안)', amount:65000, memo:'결혼기념일', user_name:'남편', is_recurring:false },
-    { id:'d5', date:'2025-03-10', type:'expense', category:'교통', name:'지하철 교통카드', amount:32000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d6', date:'2025-03-12', type:'expense', category:'카페', name:'스타벅스', amount:12500, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d7', date:'2025-03-15', type:'income', category:'부수입', name:'프리랜서 수입', amount:500000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d8', date:'2025-03-18', type:'expense', category:'의류', name:'유니클로', amount:89000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d9', date:'2025-03-20', type:'expense', category:'식비', name:'배달 (치킨)', amount:28000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d10', date:'2025-03-22', type:'expense', category:'문화', name:'영화 2인', amount:28000, memo:'', user_name:'남편', is_recurring:false },
+    { id:'d1', date:d(1), type:'income', category:'급여', name:'이번달 급여', amount:3500000, memo:'', user_name:'남편', is_recurring:false },
+    { id:'d2', date:d(2), type:'expense', category:'마트', name:'이마트 장보기', amount:87000, memo:'', user_name:'남편', is_recurring:false },
+    { id:'d3', date:d(5), type:'expense', category:'관리비', name:'아파트 관리비', amount:150000, memo:'', user_name:'아내', is_recurring:true },
+    { id:'d4', date:d(8), type:'expense', category:'식비', name:'외식 (이탈리안)', amount:65000, memo:'결혼기념일', user_name:'남편', is_recurring:false },
+    { id:'d5', date:d(10), type:'expense', category:'교통', name:'지하철 교통카드', amount:32000, memo:'', user_name:'아내', is_recurring:false },
+    { id:'d6', date:d(12), type:'expense', category:'카페', name:'스타벅스', amount:12500, memo:'', user_name:'아내', is_recurring:false },
+    { id:'d7', date:d(15), type:'income', category:'부수입', name:'프리랜서 수입', amount:500000, memo:'', user_name:'아내', is_recurring:false },
+    { id:'d8', date:d(18), type:'expense', category:'의류', name:'유니클로', amount:89000, memo:'', user_name:'아내', is_recurring:false },
+    { id:'d9', date:d(20), type:'expense', category:'식비', name:'배달 (치킨)', amount:28000, memo:'', user_name:'남편', is_recurring:false },
+    { id:'d10', date:d(22), type:'expense', category:'문화', name:'영화 2인', amount:28000, memo:'', user_name:'남편', is_recurring:false },
   ];
   localStorage.setItem('transactions_demo', JSON.stringify(demo));
+  const nowMs = new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0');
   localStorage.setItem('budgets_demo', JSON.stringify([
-    { month:'2025-03', category:'식비', amount:300000 },
-    { month:'2025-03', category:'관리비', amount:180000 },
-    { month:'2025-03', category:'교통', amount:100000 },
-    { month:'2025-03', category:'카페', amount:50000 },
+    { month: nowMs, category:'식비', amount:300000 },
+    { month: nowMs, category:'관리비', amount:180000 },
+    { month: nowMs, category:'교통', amount:100000 },
+    { month: nowMs, category:'카페', amount:50000 },
   ]));
   showApp();
 }
@@ -1126,9 +1130,12 @@ async function syncData() {
 function renderAll() {
   renderHomePage();
   renderHistoryPage();
-  renderStatsPage();
   renderBudgetPage();
   renderRecurringList();
+  // Only render stats if that page is active
+  if (document.getElementById('page-stats').classList.contains('active')) {
+    renderStatsPage();
+  }
 }
 
 function getMonthStr() { return `${currentYear}-${String(currentMonth+1).padStart(2,'0')}`; }
@@ -1257,6 +1264,7 @@ function renderTxItems(items) {
 }
 
 function renderStatsPage() {
+  if (typeof Chart === 'undefined') { console.warn('Chart.js not loaded yet'); return; }
   const tx = getMonthTx();
   const expenses = tx.filter(t=>t.type==='expense');
 
@@ -1425,8 +1433,10 @@ function openThemeModal() { openModal('theme-modal'); renderThemeGrids(); }
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-document.querySelectorAll('.modal-backdrop').forEach(b => {
-  b.addEventListener('click', e => { if (e.target === b) b.classList.remove('open'); });
+window.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.modal-backdrop').forEach(b => {
+    b.addEventListener('click', e => { if (e.target === b) b.classList.remove('open'); });
+  });
 });
 
 let currentTxType = 'expense';
@@ -1719,6 +1729,7 @@ function exportExcel(data, filename) {
     '카테고리': t.category, '항목': t.name,
     '금액': t.amount, '메모': t.memo||'', '작성자': t.user_name||''
   }));
+  if (typeof XLSX === 'undefined') { showToast('잠시 후 다시 시도해 주세요'); return; }
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '가계부');
