@@ -1043,12 +1043,19 @@ async function initSupabase(url, key) {
 }
 
 function showApp() {
-  document.getElementById('setup-screen').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
-  renderCategoryGrid('expense');
-  renderCategoryGrids();
-  updateMonthLabel();
-  loadData();
+  try {
+    document.getElementById('setup-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    renderCategoryGrid('expense');
+    renderCategoryGrids();
+    updateMonthLabel();
+    loadData();
+  } catch(e) {
+    console.error('showApp inner error:', e);
+    // Still show the app even if render fails
+    document.getElementById('setup-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+  }
 }
 
 async function saveSupabaseConfig() {
@@ -1091,7 +1098,12 @@ function useDemoMode() {
     { month: nowMs, category:'교통', amount:100000 },
     { month: nowMs, category:'카페', amount:50000 },
   ]));
-  showApp();
+  try {
+    showApp();
+  } catch(e) {
+    console.error('showApp error:', e);
+    alert('오류: ' + e.message);
+  }
 }
 
 function openSetupScreen() {
@@ -1481,7 +1493,9 @@ function setType(type) {
 
 function renderCategoryGrid(type) {
   const cats = CATEGORIES[type] || CATEGORIES.expense;
-  document.getElementById('cat-grid').innerHTML = cats.map(c => `
+  const el = document.getElementById('cat-grid');
+  if (!el) return;
+  el.innerHTML = cats.map(c => `
     <div class="cat-btn ${selectedCategory===c.key?'selected':''}" onclick="selectCategory('${c.key}')">
       <div class="cat-emoji">${c.emoji}</div>
       <div class="cat-name">${c.key}</div>
@@ -1495,10 +1509,12 @@ function selectCategory(key) {
 }
 
 function renderCategoryGrids() {
-  const sel = document.getElementById('budget-cat');
-  if (sel) sel.innerHTML = CATEGORIES.expense.map(c=>`<option value="${c.key}">${c.emoji} ${c.key}</option>`).join('');
-  const rs = document.getElementById('rec-cat');
-  if (rs) rs.innerHTML = CATEGORIES.expense.map(c=>`<option value="${c.key}">${c.emoji} ${c.key}</option>`).join('');
+  try {
+    const sel = document.getElementById('budget-cat');
+    if (sel) sel.innerHTML = CATEGORIES.expense.map(c=>`<option value="${c.key}">${c.emoji} ${c.key}</option>`).join('');
+    const rs = document.getElementById('rec-cat');
+    if (rs) rs.innerHTML = CATEGORIES.expense.map(c=>`<option value="${c.key}">${c.emoji} ${c.key}</option>`).join('');
+  } catch(e) { console.error('renderCategoryGrids error:', e); }
 }
 
 async function saveTransaction() {
