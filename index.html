@@ -565,6 +565,10 @@ body {
 </div>
 
 <div id="setup-screen" class="setup-screen" style="display:none">
+  <div style="width:100%;display:flex;align-items:center;margin-bottom:4px">
+    <button onclick="showApp()" style="background:none;border:none;color:var(--accent);font-size:22px;cursor:pointer;padding:4px 8px 4px 0">‹</button>
+    <span style="font-size:14px;color:var(--text2)">뒤로가기</span>
+  </div>
   <div class="setup-logo">💰 가계부</div>
   <p style="font-size:18px;font-weight:700;color:var(--text);">Supabase 연동 설정</p>
   <p class="setup-sub">부부 공유를 위해 Supabase 프로젝트 정보를 입력해 주세요.<br>한 번만 설정하면 됩니다!</p>
@@ -581,7 +585,7 @@ body {
   <div class="setup-card" style="margin-top:-4px">
     <div class="form-group">
       <label class="form-label">Supabase URL</label>
-      <input class="form-input" id="setup-url" placeholder="https://xxxx.supabase.co" type="text">
+      <input class="form-input" id="setup-url" placeholder="https://abcdefg.supabase.co" type="text">
     </div>
     <div class="form-group">
       <label class="form-label">Supabase Anon Key</label>
@@ -1245,24 +1249,43 @@ function useDemoMode() {
   const nowM = String(new Date().getMonth()+1).padStart(2,'0');
   const d = (day) => nowY + '-' + nowM + '-' + String(day).padStart(2,'0');
   const demo = [
-    { id:'d1', date:d(1), type:'income', category:'급여', name:'이번달 급여', amount:3500000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d2', date:d(2), type:'expense', category:'마트', name:'이마트 장보기', amount:87000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d3', date:d(5), type:'expense', category:'관리비', name:'아파트 관리비', amount:150000, memo:'', user_name:'아내', is_recurring:true },
-    { id:'d4', date:d(8), type:'expense', category:'식비', name:'외식 (이탈리안)', amount:65000, memo:'결혼기념일', user_name:'남편', is_recurring:false },
-    { id:'d5', date:d(10), type:'expense', category:'교통', name:'지하철 교통카드', amount:32000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d6', date:d(12), type:'expense', category:'카페', name:'스타벅스', amount:12500, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d7', date:d(15), type:'income', category:'부수입', name:'프리랜서 수입', amount:500000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d8', date:d(18), type:'expense', category:'의류', name:'유니클로', amount:89000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d9', date:d(20), type:'expense', category:'식비', name:'배달 (치킨)', amount:28000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d10', date:d(22), type:'expense', category:'문화', name:'영화 2인', amount:28000, memo:'', user_name:'남편', is_recurring:false },
+    { id:'d1', date:d(1), type:'income', category:'급여', name:'3월 급여', amount:3800000, memo:'세후', user_name:'남편', is_recurring:true },
+    { id:'d2', date:d(1), type:'income', category:'급여', name:'3월 급여', amount:2900000, memo:'세후', user_name:'아내', is_recurring:true },
+    { id:'d3', date:d(2), type:'expense', category:'마트', name:'이마트 주간 장보기', amount:94500, memo:'채소/육류/생필품', user_name:'아내', is_recurring:false },
+    { id:'d4', date:d(5), type:'expense', category:'관리비', name:'아파트 관리비', amount:152000, memo:'', user_name:'남편', is_recurring:true },
+    { id:'d5', date:d(5), type:'expense', category:'교육', name:'영어학원비', amount:280000, memo:'', user_name:'아내', is_recurring:true },
+    { id:'d6', date:d(7), type:'expense', category:'식비', name:'점심 회식', amount:45000, memo:'팀 점심', user_name:'남편', is_recurring:false },
+    { id:'d7', date:d(8), type:'expense', category:'카페', name:'스타벅스', amount:13500, memo:'아이스 라떼 2잔', user_name:'아내', is_recurring:false },
+    { id:'d8', date:d(10), type:'expense', category:'교통', name:'교통카드 충전', amount:50000, memo:'', user_name:'남편', is_recurring:false },
+    { id:'d9', date:d(11), type:'expense', category:'식비', name:'마켓컬리', amount:67800, memo:'새벽배송', user_name:'아내', is_recurring:false },
+    { id:'d10', date:d(12), type:'expense', category:'의료', name:'내과 진료', amount:15000, memo:'감기', user_name:'남편', is_recurring:false },
+    { id:'d11', date:d(13), type:'expense', category:'문화', name:'넷플릭스', amount:17000, memo:'', user_name:'아내', is_recurring:true },
+    { id:'d12', date:d(14), type:'expense', category:'식비', name:'배달 (피자)', amount:32000, memo:'주말 저녁', user_name:'남편', is_recurring:false },
+    { id:'d13', date:d(15), type:'income', category:'부수입', name:'중고거래 수입', amount:85000, memo:'당근마켓', user_name:'아내', is_recurring:false },
+    { id:'d14', date:d(16), type:'expense', category:'마트', name:'코스트코', amount:178000, memo:'월간 대형마트', user_name:'남편', is_recurring:false },
+    { id:'d15', date:d(17), type:'expense', category:'미용', name:'헤어샵', amount:65000, memo:'', user_name:'아내', is_recurring:false },
+    { id:'d16', date:d(18), type:'expense', category:'의류', name:'무신사 쇼핑', amount:112000, memo:'봄 옷', user_name:'아내', is_recurring:false },
+    { id:'d17', date:d(19), type:'expense', category:'교통', name:'주유비', amount:82000, memo:'', user_name:'남편', is_recurring:false },
+    { id:'d18', date:d(20), type:'expense', category:'식비', name:'외식 (일식)', amount:78000, memo:'기념일', user_name:'남편', is_recurring:false },
+    { id:'d19', date:d(21), type:'expense', category:'카페', name:'투썸플레이스', amount:16500, memo:'', user_name:'아내', is_recurring:false },
+    { id:'d20', date:d(22), type:'expense', category:'마트', name:'이마트 주간 장보기', amount:87000, memo:'', user_name:'아내', is_recurring:false },
+    { id:'d21', date:d(23), type:'expense', category:'문화', name:'영화 2인', amount:28000, memo:'주말 데이트', user_name:'남편', is_recurring:false },
+    { id:'d22', date:d(25), type:'expense', category:'식비', name:'배달 (중식)', amount:29000, memo:'', user_name:'남편', is_recurring:false },
+    { id:'d23', date:d(26), type:'expense', category:'교육', name:'책 구매', amount:34000, memo:'온라인 서점', user_name:'아내', is_recurring:false },
+    { id:'d24', date:d(27), type:'income', category:'용돈', name:'부모님 용돈 수령', amount:200000, memo:'', user_name:'아내', is_recurring:false },
+    { id:'d25', date:d(28), type:'expense', category:'기타', name:'생활용품', amount:43000, memo:'다이소', user_name:'아내', is_recurring:false },
   ];
   localStorage.setItem('transactions_demo', JSON.stringify(demo));
   const nowMs = new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0');
   localStorage.setItem('budgets_demo', JSON.stringify([
-    { month: nowMs, category:'식비', amount:300000 },
+    { month: nowMs, category:'식비', amount:350000 },
+    { month: nowMs, category:'마트', amount:400000 },
     { month: nowMs, category:'관리비', amount:180000 },
-    { month: nowMs, category:'교통', amount:100000 },
-    { month: nowMs, category:'카페', amount:50000 },
+    { month: nowMs, category:'교통', amount:150000 },
+    { month: nowMs, category:'카페', amount:60000 },
+    { month: nowMs, category:'문화', amount:80000 },
+    { month: nowMs, category:'의류', amount:150000 },
+    { month: nowMs, category:'교육', amount:350000 },
   ]));
   try {
     showApp();
