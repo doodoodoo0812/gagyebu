@@ -1079,10 +1079,9 @@ function kakaoLogin() {
           localStorage.setItem('userName', nickname);
           localStorage.setItem('kakao_logged_in', 'true');
           document.getElementById('username-display').textContent = nickname;
-          document.getElementById('login-screen').style.display = 'none';
           const cfg = getSupabaseConfig();
           if (cfg) {
-            initSupabase(cfg.url, cfg.key).then(() => showApp());
+            initSupabase(cfg.url, cfg.key).then(() => showApp()).catch(() => showApp());
           } else {
             showSetupScreen();
           }
@@ -1108,7 +1107,7 @@ function kakaoLogout() {
 }
 
 function showSetupScreen() {
-  document.getElementById('login-screen').style.display = 'none';
+  hideAllScreens();
   document.getElementById('setup-screen').style.display = 'flex';
 }
 
@@ -1137,6 +1136,7 @@ async function initApp() {
     }
     // Check if kakao key is set - show login screen
     if (localStorage.getItem('kakao_app_key')) {
+      hideAllScreens();
       document.getElementById('login-screen').style.display = 'flex';
       initKakao();
       return;
@@ -1150,9 +1150,11 @@ async function initApp() {
         showApp();
       }
     } else {
+      hideAllScreens();
       document.getElementById('setup-screen').style.display = 'flex';
     }
   } catch(e) {
+    hideAllScreens();
     document.getElementById('setup-screen').style.display = 'flex';
   }
 }
@@ -1192,9 +1194,15 @@ async function initSupabase(url, key) {
   }
 }
 
+function hideAllScreens() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'none';
+}
+
 function showApp() {
   try {
-    document.getElementById('setup-screen').style.display = 'none';
+    hideAllScreens();
     document.getElementById('app').style.display = 'flex';
     initModalBackdrops();
     renderCategoryGrid('expense');
@@ -1202,9 +1210,7 @@ function showApp() {
     updateMonthLabel();
     loadData();
   } catch(e) {
-    console.error('showApp inner error:', e);
-    // Still show the app even if render fails
-    document.getElementById('setup-screen').style.display = 'none';
+    hideAllScreens();
     document.getElementById('app').style.display = 'flex';
   }
 }
@@ -1268,9 +1274,8 @@ function useDemoMode() {
 }
 
 function openSetupScreen() {
-  document.getElementById('app').style.display = 'none';
+  hideAllScreens();
   document.getElementById('setup-screen').style.display = 'flex';
-  document.getElementById('login-screen').style.display = 'none';
 }
 
 // ===== DATA LOAD =====
