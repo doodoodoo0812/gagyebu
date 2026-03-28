@@ -1057,8 +1057,7 @@ function initKakao() {
 function kakaoLogin() {
   const appKey = localStorage.getItem('kakao_app_key');
   if (!appKey) {
-    const key = prompt('카카오 JavaScript App Key를 입력하세요:
-(developers.kakao.com → 내 앱 → 앱 키)');
+    const key = prompt('카카오 JavaScript App Key를 입력하세요 (developers.kakao.com → 내 앱 → 앱 키)');
     if (!key) return;
     localStorage.setItem('kakao_app_key', key.trim());
     location.reload();
