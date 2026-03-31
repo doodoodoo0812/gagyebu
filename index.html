@@ -806,6 +806,16 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
 
     <div class="settings-section">
       <div class="settings-title">데이터</div>
+      <div class="settings-item" onclick="setGeminiKey()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🤖</div>
+          <div>
+            <div class="settings-item-text">Gemini API 키 설정</div>
+            <div class="settings-item-sub" id="gemini-key-status">영수증 AI 인식용</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
       <div class="settings-item" onclick="exportToExcel()">
         <div class="settings-item-left">
           <div class="settings-item-icon">📥</div>
@@ -1173,6 +1183,9 @@ function loadSettings() {
   document.getElementById('username-input').value = userName;
   const rec = localStorage.getItem('recurring');
   if (rec) recurringItems = JSON.parse(rec);
+  const geminiKey = localStorage.getItem('gemini_api_key');
+  const geminiStatus = document.getElementById('gemini-key-status');
+  if (geminiStatus) geminiStatus.textContent = geminiKey ? '✅ 키 설정됨' : '영수증 AI 인식용';
   renderThemeGrids();
 }
 
@@ -1244,53 +1257,99 @@ async function saveSupabaseConfig() {
 function useDemoMode() {
   localStorage.setItem('demoMode', 'true');
   demoMode = true;
-  // seed demo data
+
   const nowY = new Date().getFullYear();
-  const nowM = String(new Date().getMonth()+1).padStart(2,'0');
-  const d = (day) => nowY + '-' + nowM + '-' + String(day).padStart(2,'0');
+  const nowM = new Date().getMonth();
+  const nowMStr = String(nowM + 1).padStart(2,'0');
+
+  // Helper: make date string for current month
+  const d = (day, monthOffset=0) => {
+    const dt = new Date(nowY, nowM + monthOffset, day);
+    return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+  };
+
   const demo = [
-    { id:'d1', date:d(1), type:'income', category:'급여', name:'3월 급여', amount:3800000, memo:'세후', user_name:'남편', is_recurring:true },
-    { id:'d2', date:d(1), type:'income', category:'급여', name:'3월 급여', amount:2900000, memo:'세후', user_name:'아내', is_recurring:true },
-    { id:'d3', date:d(2), type:'expense', category:'마트', name:'이마트 주간 장보기', amount:94500, memo:'채소/육류/생필품', user_name:'아내', is_recurring:false },
-    { id:'d4', date:d(5), type:'expense', category:'관리비', name:'아파트 관리비', amount:152000, memo:'', user_name:'남편', is_recurring:true },
-    { id:'d5', date:d(5), type:'expense', category:'교육', name:'영어학원비', amount:280000, memo:'', user_name:'아내', is_recurring:true },
-    { id:'d6', date:d(7), type:'expense', category:'식비', name:'점심 회식', amount:45000, memo:'팀 점심', user_name:'남편', is_recurring:false },
-    { id:'d7', date:d(8), type:'expense', category:'카페', name:'스타벅스', amount:13500, memo:'아이스 라떼 2잔', user_name:'아내', is_recurring:false },
-    { id:'d8', date:d(10), type:'expense', category:'교통', name:'교통카드 충전', amount:50000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d9', date:d(11), type:'expense', category:'식비', name:'마켓컬리', amount:67800, memo:'새벽배송', user_name:'아내', is_recurring:false },
-    { id:'d10', date:d(12), type:'expense', category:'의료', name:'내과 진료', amount:15000, memo:'감기', user_name:'남편', is_recurring:false },
-    { id:'d11', date:d(13), type:'expense', category:'문화', name:'넷플릭스', amount:17000, memo:'', user_name:'아내', is_recurring:true },
-    { id:'d12', date:d(14), type:'expense', category:'식비', name:'배달 (피자)', amount:32000, memo:'주말 저녁', user_name:'남편', is_recurring:false },
-    { id:'d13', date:d(15), type:'income', category:'부수입', name:'중고거래 수입', amount:85000, memo:'당근마켓', user_name:'아내', is_recurring:false },
-    { id:'d14', date:d(16), type:'expense', category:'마트', name:'코스트코', amount:178000, memo:'월간 대형마트', user_name:'남편', is_recurring:false },
-    { id:'d15', date:d(17), type:'expense', category:'미용', name:'헤어샵', amount:65000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d16', date:d(18), type:'expense', category:'의류', name:'무신사 쇼핑', amount:112000, memo:'봄 옷', user_name:'아내', is_recurring:false },
-    { id:'d17', date:d(19), type:'expense', category:'교통', name:'주유비', amount:82000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d18', date:d(20), type:'expense', category:'식비', name:'외식 (일식)', amount:78000, memo:'기념일', user_name:'남편', is_recurring:false },
-    { id:'d19', date:d(21), type:'expense', category:'카페', name:'투썸플레이스', amount:16500, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d20', date:d(22), type:'expense', category:'마트', name:'이마트 주간 장보기', amount:87000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d21', date:d(23), type:'expense', category:'문화', name:'영화 2인', amount:28000, memo:'주말 데이트', user_name:'남편', is_recurring:false },
-    { id:'d22', date:d(25), type:'expense', category:'식비', name:'배달 (중식)', amount:29000, memo:'', user_name:'남편', is_recurring:false },
-    { id:'d23', date:d(26), type:'expense', category:'교육', name:'책 구매', amount:34000, memo:'온라인 서점', user_name:'아내', is_recurring:false },
-    { id:'d24', date:d(27), type:'income', category:'용돈', name:'부모님 용돈 수령', amount:200000, memo:'', user_name:'아내', is_recurring:false },
-    { id:'d25', date:d(28), type:'expense', category:'기타', name:'생활용품', amount:43000, memo:'다이소', user_name:'아내', is_recurring:false },
+    // ===== 이번달 =====
+    { id:'d1',  date:d(1),  type:'income',  category:'급여',   name:'이번달 급여',        amount:3800000, memo:'세후 실수령액',    user_name:'남편', is_recurring:true  },
+    { id:'d2',  date:d(1),  type:'income',  category:'급여',   name:'이번달 급여',        amount:2900000, memo:'세후 실수령액',    user_name:'아내', is_recurring:true  },
+    { id:'d3',  date:d(2),  type:'expense', category:'마트',   name:'이마트 장보기',      amount:94500,   memo:'채소·육류·생필품', user_name:'아내', is_recurring:false },
+    { id:'d4',  date:d(5),  type:'expense', category:'관리비', name:'아파트 관리비',      amount:152000,  memo:'',                user_name:'남편', is_recurring:true  },
+    { id:'d5',  date:d(5),  type:'expense', category:'교육',   name:'영어학원비',         amount:280000,  memo:'',                user_name:'아내', is_recurring:true  },
+    { id:'d6',  date:d(7),  type:'expense', category:'식비',   name:'점심 회식',          amount:45000,   memo:'팀 점심',          user_name:'남편', is_recurring:false },
+    { id:'d7',  date:d(8),  type:'expense', category:'카페',   name:'스타벅스',           amount:13500,   memo:'아이스 라떼 2잔',  user_name:'아내', is_recurring:false },
+    { id:'d8',  date:d(10), type:'expense', category:'교통',   name:'교통카드 충전',      amount:50000,   memo:'',                user_name:'남편', is_recurring:false },
+    { id:'d9',  date:d(11), type:'expense', category:'식비',   name:'마켓컬리',           amount:67800,   memo:'새벽배송',         user_name:'아내', is_recurring:false },
+    { id:'d10', date:d(12), type:'expense', category:'의료',   name:'내과 진료',          amount:15000,   memo:'감기',             user_name:'남편', is_recurring:false },
+    { id:'d11', date:d(13), type:'expense', category:'문화',   name:'넷플릭스',           amount:17000,   memo:'',                user_name:'아내', is_recurring:true  },
+    { id:'d12', date:d(14), type:'expense', category:'식비',   name:'배달 (피자)',         amount:32000,   memo:'주말 저녁',         user_name:'남편', is_recurring:false },
+    { id:'d13', date:d(15), type:'income',  category:'부수입', name:'중고거래 수입',      amount:85000,   memo:'당근마켓',          user_name:'아내', is_recurring:false },
+    { id:'d14', date:d(16), type:'expense', category:'마트',   name:'코스트코',           amount:178000,  memo:'월간 대형마트',     user_name:'남편', is_recurring:false },
+    { id:'d15', date:d(17), type:'expense', category:'미용',   name:'헤어샵',             amount:65000,   memo:'',                user_name:'아내', is_recurring:false },
+    { id:'d16', date:d(18), type:'expense', category:'의류',   name:'무신사 쇼핑',        amount:112000,  memo:'봄 옷',            user_name:'아내', is_recurring:false },
+    { id:'d17', date:d(19), type:'expense', category:'교통',   name:'주유비',             amount:82000,   memo:'',                user_name:'남편', is_recurring:false },
+    { id:'d18', date:d(20), type:'expense', category:'식비',   name:'외식 (일식)',         amount:78000,   memo:'기념일',           user_name:'남편', is_recurring:false },
+    { id:'d19', date:d(21), type:'expense', category:'카페',   name:'투썸플레이스',       amount:16500,   memo:'',                user_name:'아내', is_recurring:false },
+    { id:'d20', date:d(22), type:'expense', category:'마트',   name:'이마트 장보기',      amount:87000,   memo:'주간 장보기',       user_name:'아내', is_recurring:false },
+    { id:'d21', date:d(23), type:'expense', category:'문화',   name:'영화 2인',           amount:28000,   memo:'주말 데이트',       user_name:'남편', is_recurring:false },
+    { id:'d22', date:d(25), type:'expense', category:'식비',   name:'배달 (중식)',         amount:29000,   memo:'',                user_name:'남편', is_recurring:false },
+    { id:'d23', date:d(26), type:'expense', category:'교육',   name:'책 구매',            amount:34000,   memo:'온라인 서점',       user_name:'아내', is_recurring:false },
+    { id:'d24', date:d(27), type:'income',  category:'용돈',   name:'부모님 용돈',        amount:200000,  memo:'',                user_name:'아내', is_recurring:false },
+    { id:'d25', date:d(28), type:'expense', category:'기타',   name:'생활용품 (다이소)',   amount:43000,   memo:'',                user_name:'아내', is_recurring:false },
+
+    // ===== 지난달 (통계 그래프용) =====
+    { id:'p1',  date:d(1,-1),  type:'income',  category:'급여',   name:'지난달 급여',     amount:3800000, memo:'', user_name:'남편', is_recurring:true  },
+    { id:'p2',  date:d(1,-1),  type:'income',  category:'급여',   name:'지난달 급여',     amount:2900000, memo:'', user_name:'아내', is_recurring:true  },
+    { id:'p3',  date:d(3,-1),  type:'expense', category:'마트',   name:'이마트',          amount:112000,  memo:'', user_name:'아내', is_recurring:false },
+    { id:'p4',  date:d(5,-1),  type:'expense', category:'관리비', name:'아파트 관리비',   amount:152000,  memo:'', user_name:'남편', is_recurring:true  },
+    { id:'p5',  date:d(7,-1),  type:'expense', category:'식비',   name:'외식',            amount:54000,   memo:'', user_name:'남편', is_recurring:false },
+    { id:'p6',  date:d(10,-1), type:'expense', category:'교통',   name:'교통카드',        amount:50000,   memo:'', user_name:'남편', is_recurring:false },
+    { id:'p7',  date:d(12,-1), type:'expense', category:'카페',   name:'커피',            amount:22000,   memo:'', user_name:'아내', is_recurring:false },
+    { id:'p8',  date:d(14,-1), type:'expense', category:'의류',   name:'쇼핑',            amount:89000,   memo:'', user_name:'아내', is_recurring:false },
+    { id:'p9',  date:d(15,-1), type:'expense', category:'문화',   name:'넷플릭스',        amount:17000,   memo:'', user_name:'아내', is_recurring:true  },
+    { id:'p10', date:d(18,-1), type:'expense', category:'식비',   name:'배달음식',        amount:45000,   memo:'', user_name:'남편', is_recurring:false },
+    { id:'p11', date:d(20,-1), type:'expense', category:'마트',   name:'코스트코',        amount:195000,  memo:'', user_name:'남편', is_recurring:false },
+    { id:'p12', date:d(22,-1), type:'expense', category:'미용',   name:'헤어',            amount:45000,   memo:'', user_name:'아내', is_recurring:false },
+    { id:'p13', date:d(25,-1), type:'expense', category:'교육',   name:'학원비',          amount:280000,  memo:'', user_name:'아내', is_recurring:true  },
+    { id:'p14', date:d(27,-1), type:'expense', category:'교통',   name:'주유',            amount:76000,   memo:'', user_name:'남편', is_recurring:false },
+    { id:'p15', date:d(28,-1), type:'expense', category:'식비',   name:'외식 (한식)',      amount:62000,   memo:'', user_name:'남편', is_recurring:false },
+
+    // ===== 2달 전 (그래프용) =====
+    { id:'q1',  date:d(1,-2),  type:'income',  category:'급여',   name:'급여',            amount:3800000, memo:'', user_name:'남편', is_recurring:true  },
+    { id:'q2',  date:d(1,-2),  type:'income',  category:'급여',   name:'급여',            amount:2900000, memo:'', user_name:'아내', is_recurring:true  },
+    { id:'q3',  date:d(5,-2),  type:'expense', category:'관리비', name:'관리비',          amount:148000,  memo:'', user_name:'남편', is_recurring:true  },
+    { id:'q4',  date:d(8,-2),  type:'expense', category:'마트',   name:'마트',            amount:134000,  memo:'', user_name:'아내', is_recurring:false },
+    { id:'q5',  date:d(12,-2), type:'expense', category:'식비',   name:'외식',            amount:89000,   memo:'', user_name:'남편', is_recurring:false },
+    { id:'q6',  date:d(15,-2), type:'expense', category:'교통',   name:'교통',            amount:62000,   memo:'', user_name:'남편', is_recurring:false },
+    { id:'q7',  date:d(18,-2), type:'expense', category:'문화',   name:'영화·넷플릭스',   amount:45000,   memo:'', user_name:'아내', is_recurring:false },
+    { id:'q8',  date:d(20,-2), type:'expense', category:'의류',   name:'쇼핑',            amount:145000,  memo:'', user_name:'아내', is_recurring:false },
+    { id:'q9',  date:d(22,-2), type:'expense', category:'카페',   name:'카페',            amount:31000,   memo:'', user_name:'아내', is_recurring:false },
+    { id:'q10', date:d(25,-2), type:'expense', category:'교육',   name:'학원비',          amount:280000,  memo:'', user_name:'아내', is_recurring:true  },
   ];
+
   localStorage.setItem('transactions_demo', JSON.stringify(demo));
-  const nowMs = new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0');
+
+  const nowMs = nowY + '-' + nowMStr;
   localStorage.setItem('budgets_demo', JSON.stringify([
-    { month: nowMs, category:'식비', amount:350000 },
-    { month: nowMs, category:'마트', amount:400000 },
+    { month: nowMs, category:'식비',   amount:350000 },
+    { month: nowMs, category:'마트',   amount:400000 },
     { month: nowMs, category:'관리비', amount:180000 },
-    { month: nowMs, category:'교통', amount:150000 },
-    { month: nowMs, category:'카페', amount:60000 },
-    { month: nowMs, category:'문화', amount:80000 },
-    { month: nowMs, category:'의류', amount:150000 },
-    { month: nowMs, category:'교육', amount:350000 },
+    { month: nowMs, category:'교통',   amount:150000 },
+    { month: nowMs, category:'카페',   amount:60000  },
+    { month: nowMs, category:'문화',   amount:80000  },
+    { month: nowMs, category:'의류',   amount:150000 },
+    { month: nowMs, category:'교육',   amount:350000 },
   ]));
+
+  // 정기 지출 샘플
+  localStorage.setItem('recurring', JSON.stringify([
+    { name:'아파트 관리비', amount:152000, category:'관리비', day:5 },
+    { name:'넷플릭스',      amount:17000,  category:'문화',   day:13 },
+    { name:'영어학원비',    amount:280000, category:'교육',   day:5 },
+  ]));
+
   try {
     showApp();
   } catch(e) {
-    console.error('showApp error:', e);
     alert('앱 로드 오류: ' + e.message);
   }
 }
@@ -1782,37 +1841,94 @@ async function handlePhotoSelect(e) {
   reader.readAsDataURL(file);
 }
 
+function getGeminiKey() {
+  return localStorage.getItem('gemini_api_key') || '';
+}
+
 async function analyzeReceiptWithAI(base64) {
+  const apiKey = getGeminiKey();
+  if (!apiKey) {
+    const key = prompt('Gemini API Key를 입력하세요 (aistudio.google.com에서 무료 발급)');
+    if (!key) return;
+    localStorage.setItem('gemini_api_key', key.trim());
+    await analyzeReceiptWithAI(base64);
+    return;
+  }
+
   document.getElementById('ai-loading').style.display = 'flex';
   document.getElementById('ai-result').style.display = 'none';
+
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 300,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64.split(',')[1] } },
-            { type: 'text', text: '이 영수증을 분석해서 JSON으로만 답해. {"name":"가게명","amount":숫자,"category":"식비|카페|마트|교통|의료|문화|의류|교육|미용|기타 중 하나"} 형태로만. 추측해서라도 채워줘.' }
-          ]
-        }]
-      })
-    });
+    const imageData = base64.split(',')[1];
+    const mimeType = base64.split(';')[0].split(':')[1] || 'image/jpeg';
+
+    const response = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: imageData
+                }
+              },
+              {
+                text: '이 영수증 이미지를 분석해서 반드시 JSON 형식으로만 응답해. 다른 말은 절대 하지마. 형식: {"name":"가게명 또는 상품명","amount":숫자만,"category":"식비,카페,마트,교통,의료,문화,의류,교육,미용,기타 중 하나"} 금액은 숫자만, 원 표시 없이.'
+              }
+            ]
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 200
+          }
+        })
+      }
+    );
+
     const data = await response.json();
-    const text = data.content?.[0]?.text || '';
-    const match = text.match(/\{[\s\S]*\}/);
+
+    if (data.error) {
+      if (data.error.code === 400 || data.error.code === 403) {
+        localStorage.removeItem('gemini_api_key');
+        alert('API 키가 올바르지 않아요. 다시 입력해 주세요.');
+      } else {
+        alert('AI 분석 오류: ' + data.error.message);
+      }
+      document.getElementById('ai-loading').style.display = 'none';
+      return;
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const clean = text.replace(/```json|```/g, '').trim();
+    const match = clean.match(/\{[\s\S]*\}/);
+
     if (match) {
       const parsed = JSON.parse(match[0]);
       if (parsed.name) document.getElementById('tx-name').value = parsed.name;
-      if (parsed.amount) document.getElementById('tx-amount').value = parsed.amount;
-      if (parsed.category) { selectedCategory = parsed.category; renderCategoryGrid(currentTxType); }
+      if (parsed.amount) {
+        const amt = parseInt(String(parsed.amount).replace(/[^0-9]/g, ''));
+        if (amt > 0) document.getElementById('tx-amount').value = amt;
+      }
+      if (parsed.category) {
+        const validCats = ['식비','카페','마트','교통','의료','문화','의류','교육','미용','기타'];
+        if (validCats.includes(parsed.category)) {
+          selectedCategory = parsed.category;
+          renderCategoryGrid(currentTxType);
+        }
+      }
       document.getElementById('ai-result').style.display = 'block';
-      document.getElementById('ai-result').innerHTML = `<div style="font-size:11px;color:var(--accent);margin-bottom:4px">✨ AI 인식 완료 — 확인 후 수정하세요</div>`;
+      document.getElementById('ai-result').innerHTML = '<div style="font-size:12px;color:var(--accent);padding:8px 12px;background:var(--surface2);border-radius:8px;margin-top:4px">✨ AI 인식 완료! 내용 확인 후 수정하세요</div>';
+    } else {
+      document.getElementById('ai-result').style.display = 'block';
+      document.getElementById('ai-result').innerHTML = '<div style="font-size:12px;color:var(--warning);padding:8px 12px;background:var(--surface2);border-radius:8px;margin-top:4px">⚠️ 인식 실패 — 직접 입력해 주세요</div>';
     }
   } catch(e) {
+    document.getElementById('ai-result').style.display = 'block';
+    document.getElementById('ai-result').innerHTML = '<div style="font-size:12px;color:var(--expense);padding:8px 12px;background:var(--surface2);border-radius:8px;margin-top:4px">❌ 오류 발생 — 네트워크를 확인해 주세요</div>';
   }
   document.getElementById('ai-loading').style.display = 'none';
 }
@@ -1994,6 +2110,23 @@ function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function setGeminiKey() {
+  const current = localStorage.getItem('gemini_api_key');
+  const msg = current
+    ? 'Gemini API 키가 설정되어 있어요. 변경하려면 새 키를 입력하세요 (취소하면 유지):'
+    : 'Gemini API Key를 입력하세요 (aistudio.google.com에서 무료 발급):';
+  const key = prompt(msg);
+  if (key && key.trim()) {
+    localStorage.setItem('gemini_api_key', key.trim());
+    document.getElementById('gemini-key-status').textContent = '✅ 키 설정됨';
+    showToast('✅ Gemini API 키 저장 완료');
+  } else if (key === '') {
+    localStorage.removeItem('gemini_api_key');
+    document.getElementById('gemini-key-status').textContent = '영수증 AI 인식용';
+    showToast('🗑️ 키 삭제됨');
+  }
 }
 
 function fmtMoney(n) { return '₩' + Number(n).toLocaleString('ko-KR'); }
