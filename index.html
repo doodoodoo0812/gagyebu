@@ -1255,11 +1255,11 @@ const THEMES = [
 
 // ===== INIT =====
 // ===== KAKAO AUTH =====
-const KAKAO_APP_KEY = localStorage.getItem('kakao_app_key') || '';
+const KAKAO_APP_KEY = localStorage.getItem('kakao_app_key') || 'ab26e3a094a0f92d0f8ad949263ac83d';
 
 function initKakao() {
-  if (!window.Kakao) return false;
-  if (!Kakao.isInitialized() && KAKAO_APP_KEY) {
+  if (!window.Kakao) { console.warn('Kakao SDK not loaded yet'); return false; }
+  if (!Kakao.isInitialized()) {
     Kakao.init(KAKAO_APP_KEY);
   }
   return Kakao.isInitialized();
@@ -1288,6 +1288,8 @@ function kakaoLogin() {
           localStorage.setItem('kakao_id', kakaoId);
           localStorage.setItem('userName', nickname);
           localStorage.setItem('kakao_logged_in', 'true');
+          document.getElementById('username-display').textContent = nickname;
+          localStorage.setItem('userName', nickname);
           document.getElementById('username-display').textContent = nickname;
           const cfg = getSupabaseConfig();
           if (cfg) {
@@ -1344,25 +1346,17 @@ async function initApp() {
       showApp();
       return;
     }
-    // Check if kakao key is set - show login screen
-    if (localStorage.getItem('kakao_app_key')) {
-      hideAllScreens();
-      document.getElementById('login-screen').style.display = 'flex';
-      initKakao();
-      return;
-    }
-    // No kakao setup - show setup or app
-    if (cfg) {
-      try {
-        await initSupabase(cfg.url, cfg.key);
-        showApp();
-      } catch(e) {
-        showApp();
+    // Always show kakao login screen if not logged in
+    hideAllScreens();
+    document.getElementById('login-screen').style.display = 'flex';
+    // Init kakao after SDK loads
+    const kakaoWait = setInterval(() => {
+      if (window.Kakao) {
+        clearInterval(kakaoWait);
+        initKakao();
       }
-    } else {
-      hideAllScreens();
-      document.getElementById('setup-screen').style.display = 'flex';
-    }
+    }, 200);
+    setTimeout(() => clearInterval(kakaoWait), 5000);
   } catch(e) {
     hideAllScreens();
     document.getElementById('setup-screen').style.display = 'flex';
