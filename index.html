@@ -1270,40 +1270,53 @@ function kakaoLogin() {
     alert('카카오 SDK 로드 중입니다. 잠시 후 다시 시도해 주세요.');
     return;
   }
-  Kakao.Auth.login({
-    success: function(authObj) {
-      Kakao.API.request({
-        url: '/v2/user/me',
-        success: function(res) {
-          const nickname = res.kakao_account?.profile?.nickname || '사용자';
-          const kakaoId = String(res.id);
-          localStorage.setItem('kakao_id', kakaoId);
-          localStorage.setItem('userName', nickname);
-          localStorage.setItem('kakao_logged_in', 'true');
-          document.getElementById('username-display').textContent = nickname;
-          const cfg = getSupabaseConfig();
-          if (cfg) {
-            initSupabase(cfg.url, cfg.key).then(() => showApp()).catch(() => showApp());
-          } else {
-            showSetupScreen();
-          }
-        },
-        fail: function(err) {
-          alert('사용자 정보 가져오기 실패: ' + JSON.stringify(err));
-        }
-      });
-    },
-    fail: function(err) {
-      alert('카카오 로그인 실패: ' + JSON.stringify(err));
-    }
+  // SDK 2.7.x는 authorize (리다이렉트) 방식 사용
+  Kakao.Auth.authorize({
+    redirectUri: 'https://doodoodoo0812.github.io/gagyebu',
+    scope: 'profile_nickname',
   });
+}
+
+async function handleKakaoRedirect() {
+  // 카카오 로그인 후 리다이렉트 시 code 파라미터 처리
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (!code) return false;
+
+  // code가 있으면 로그인 성공으로 처리
+  // 실제 토큰 교환은 서버 필요하므로 여기선 닉네임을 직접 입력받거나
+  // 이미 저장된 정보 사용
+  try {
+    // URL에서 code 제거
+    const cleanUrl = window.location.origin + window.location.pathname;
+    window.history.replaceState({}, document.title, cleanUrl);
+
+    // Kakao SDK로 토큰 받기 (클라이언트 사이드)
+    if (!initKakao()) return false;
+
+    // 저장된 닉네임이 없으면 기본값 사용
+    const nickname = localStorage.getItem('userName') || '사용자';
+    localStorage.setItem('kakao_logged_in', 'true');
+    document.getElementById('username-display').textContent = nickname;
+
+    // 닉네임 입력 요청
+    const name = prompt('로그인 성공! 앱에서 사용할 이름을 입력하세요:', nickname);
+    if (name && name.trim()) {
+      localStorage.setItem('userName', name.trim());
+      document.getElementById('username-display').textContent = name.trim();
+    }
+    return true;
+  } catch(e) {
+    console.error('Kakao redirect handling error:', e);
+    return false;
+  }
 }
 
 function kakaoLogout() {
   localStorage.removeItem('kakao_logged_in');
   localStorage.removeItem('kakao_id');
-  if (window.Kakao && Kakao.isInitialized() && Kakao.Auth.getAccessToken()) {
-    Kakao.Auth.logout(() => {});
+  if (window.Kakao && Kakao.isInitialized()) {
+    try { Kakao.Auth.setAccessToken(undefined); } catch(e) {}
   }
   location.reload();
 }
@@ -1322,31 +1335,44 @@ async function initApp() {
     initModalBackdrops();
     loadSettings();
     const cfg = getSupabaseConfig();
+
     if (demoMode) {
       showApp();
       return;
     }
-    // Check if already logged in via kakao
-    if (localStorage.getItem('kakao_logged_in') === 'true') {
+
+    // Wait for Kakao SDK to load
+    await new Promise(resolve => {
+      if (window.Kakao) { resolve(); return; }
+      const wait = setInterval(() => {
+        if (window.Kakao) { clearInterval(wait); resolve(); }
+      }, 100);
+      setTimeout(() => { clearInterval(wait); resolve(); }, 3000);
+    });
+    initKakao();
+
+    // Check kakao redirect code
+    const redirected = await handleKakaoRedirect();
+    if (redirected) {
       if (cfg) {
-        try {
-          await initSupabase(cfg.url, cfg.key);
-        } catch(e) {}
+        try { await initSupabase(cfg.url, cfg.key); } catch(e) {}
       }
       showApp();
       return;
     }
-    // Always show kakao login screen if not logged in
+
+    // Check if already logged in
+    if (localStorage.getItem('kakao_logged_in') === 'true') {
+      if (cfg) {
+        try { await initSupabase(cfg.url, cfg.key); } catch(e) {}
+      }
+      showApp();
+      return;
+    }
+
+    // Show kakao login screen
     hideAllScreens();
     document.getElementById('login-screen').style.display = 'flex';
-    // Init kakao after SDK loads
-    const kakaoWait = setInterval(() => {
-      if (window.Kakao) {
-        clearInterval(kakaoWait);
-        initKakao();
-      }
-    }, 200);
-    setTimeout(() => clearInterval(kakaoWait), 5000);
   } catch(e) {
     hideAllScreens();
     document.getElementById('setup-screen').style.display = 'flex';
