@@ -1266,14 +1266,6 @@ function initKakao() {
 }
 
 function kakaoLogin() {
-  const appKey = localStorage.getItem('kakao_app_key');
-  if (!appKey) {
-    const key = prompt('카카오 JavaScript App Key를 입력하세요 (developers.kakao.com → 내 앱 → 앱 키)');
-    if (!key) return;
-    localStorage.setItem('kakao_app_key', key.trim());
-    location.reload();
-    return;
-  }
   if (!initKakao()) {
     alert('카카오 SDK 로드 중입니다. 잠시 후 다시 시도해 주세요.');
     return;
@@ -1288,8 +1280,6 @@ function kakaoLogin() {
           localStorage.setItem('kakao_id', kakaoId);
           localStorage.setItem('userName', nickname);
           localStorage.setItem('kakao_logged_in', 'true');
-          document.getElementById('username-display').textContent = nickname;
-          localStorage.setItem('userName', nickname);
           document.getElementById('username-display').textContent = nickname;
           const cfg = getSupabaseConfig();
           if (cfg) {
