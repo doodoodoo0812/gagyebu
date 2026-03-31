@@ -503,6 +503,61 @@ body {
 .login-sub { font-size: 14px; color: var(--text2); line-height: 1.6; }
 .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; width: 100%; }
 
+/* SMS Parser */
+.sms-paste-area {
+  width: 100%; padding: 12px 14px;
+  background: var(--surface); border: 2px dashed var(--border);
+  border-radius: var(--radius-sm); color: var(--text2);
+  font-size: 13px; line-height: 1.5; cursor: text;
+  min-height: 60px; outline: none; transition: border-color var(--transition);
+  font-family: var(--font-main);
+}
+.sms-paste-area:focus { border-color: var(--accent); }
+.sms-result-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(78,205,196,0.15); border: 1px solid var(--accent);
+  border-radius: 20px; padding: 4px 12px;
+  font-size: 12px; color: var(--accent); font-weight: 600; margin-top: 6px;
+}
+
+/* Calendar */
+.cal-header { display: grid; grid-template-columns: repeat(7,1fr); margin-bottom: 4px; }
+.cal-day-name { text-align:center; font-size:11px; font-weight:700; color:var(--text3); padding:4px 0; }
+.cal-day-name:first-child { color: #ff6b6b; }
+.cal-day-name:last-child { color: #4d96ff; }
+.cal-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 3px; }
+.cal-cell {
+  aspect-ratio: 1; border-radius: 8px; padding: 3px;
+  display: flex; flex-direction: column; align-items: center;
+  cursor: pointer; transition: background var(--transition); position: relative;
+}
+.cal-cell:hover { background: var(--surface2); }
+.cal-cell.today { background: var(--surface2); }
+.cal-cell.today .cal-date { 
+  background: var(--accent); color: var(--bg); 
+  width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.cal-cell.selected { background: var(--surface2); outline: 2px solid var(--accent); }
+.cal-cell.other-month { opacity: 0.3; }
+.cal-cell.sunday .cal-date { color: #ff6b6b; }
+.cal-cell.saturday .cal-date { color: #4d96ff; }
+.cal-date { font-size: 12px; font-weight: 600; color: var(--text); line-height: 1; margin-bottom: 2px; }
+.cal-dot {
+  width: 100%; height: 4px; border-radius: 2px;
+  font-size: 9px; font-weight: 700; text-align: center;
+  color: var(--bg); margin-top: 1px;
+}
+.cal-dot.has-expense { background: var(--expense); }
+.cal-dot.has-income { background: var(--income); }
+.cal-amount { font-size: 8px; color: var(--expense); font-family: var(--font-mono); font-weight: 600; line-height: 1; white-space: nowrap; overflow: hidden; width: 100%; text-align: center; }
+
+/* AI Analysis */
+.ai-analysis-card { padding: 12px; border-radius: var(--radius-sm); background: var(--surface2); margin-bottom: 8px; }
+.ai-analysis-label { font-size: 11px; color: var(--accent); font-weight: 700; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+.ai-analysis-text { font-size: 13px; color: var(--text); line-height: 1.6; }
+.ai-analysis-loading { display: flex; align-items: center; gap: 8px; padding: 16px; color: var(--accent); font-size: 13px; }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -734,6 +789,37 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
       </div>
       <div class="chart-wrap-lg"><canvas id="line-chart"></canvas></div>
     </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🤖 AI 소비 패턴 분석</div>
+        <div id="ai-analysis-refresh" onclick="runAIAnalysis()" style="font-size:12px;color:var(--accent);cursor:pointer">분석하기</div>
+      </div>
+      <div id="ai-analysis-result">
+        <div style="text-align:center;padding:20px;color:var(--text3);font-size:13px">
+          '분석하기'를 눌러 이번달 소비 패턴을 AI가 분석해 드려요
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CALENDAR -->
+  <div class="page" id="page-calendar">
+    <div class="month-selector">
+      <button class="month-btn" onclick="changeMonth(-1)">‹</button>
+      <div class="month-label" id="month-label4">2026년 3월</div>
+      <button class="month-btn" onclick="changeMonth(1)">›</button>
+    </div>
+    <div class="card" style="padding:12px">
+      <div id="calendar-grid"></div>
+    </div>
+    <div id="calendar-day-detail" style="display:none">
+      <div class="card-header" style="padding:4px 4px 0">
+        <div class="card-title" id="calendar-day-title">3월 1일</div>
+        <div id="calendar-day-total" style="font-family:var(--font-mono);font-size:13px;color:var(--expense)"></div>
+      </div>
+      <div class="tx-list" id="calendar-day-list" style="margin-top:8px"></div>
+    </div>
   </div>
 
   <!-- BUDGET -->
@@ -796,6 +882,26 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
         </div>
         <div class="toggle on" id="budget-alert-toggle" onclick="this.classList.toggle('on')"></div>
       </div>
+      <div class="settings-item" onclick="openAlarmModal()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">⏰</div>
+          <div>
+            <div class="settings-item-text">가계부 기록 알림</div>
+            <div class="settings-item-sub" id="alarm-time-display">설정 안됨</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
+      <div class="settings-item" onclick="openMonthlyReport()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">📋</div>
+          <div>
+            <div class="settings-item-text">이번달 마감 리포트</div>
+            <div class="settings-item-sub">월간 요약 리포트 보기</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -812,6 +918,16 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
           <div>
             <div class="settings-item-text">Gemini API 키 설정</div>
             <div class="settings-item-sub" id="gemini-key-status">영수증 AI 인식용</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
+      <div class="settings-item" onclick="openReceiptGallery()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🖼️</div>
+          <div>
+            <div class="settings-item-text">영수증 갤러리</div>
+            <div class="settings-item-sub">찍은 영수증 모아보기 · 월별 삭제</div>
           </div>
         </div>
         <div class="settings-item-right">›</div>
@@ -859,6 +975,9 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
     <div class="nav-item" onclick="switchPage('stats')">
       <div class="nav-icon">📊</div><span>통계</span>
     </div>
+    <div class="nav-item" onclick="switchPage('calendar')">
+      <div class="nav-icon">📅</div><span>달력</span>
+    </div>
     <div class="nav-item" onclick="switchPage('budget')">
       <div class="nav-icon">💼</div><span>예산</span>
     </div>
@@ -876,6 +995,41 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
   <div class="modal">
     <div class="modal-handle"></div>
     <div class="modal-title" id="add-modal-title">거래 추가</div>
+
+    <div class="form-group">
+      <label class="form-label">💬 결제 문자 붙여넣기</label>
+      <div
+        class="sms-paste-area"
+        id="sms-paste-area"
+        contenteditable="true"
+        placeholder="카카오페이·토스·카드사 문자를 여기에 붙여넣으세요"
+        onpaste="handleSmsPaste(event)"
+        oninput="handleSmsInput(this)"
+      >[카카오페이·토스·카드 문자를 여기에 붙여넣으세요]</div>
+      <div id="sms-result" style="display:none;margin-top:6px"></div>
+    </div>
+
+    <div style="text-align:center;color:var(--text3);font-size:12px;margin:-8px 0 8px">또는</div>
+
+    <div class="form-group">
+      <label class="form-label">📷 영수증 사진 (AI 자동 인식)</label>
+      <div class="photo-upload" id="photo-upload-area">
+        <input type="file" accept="image/*" capture="environment" id="photo-input" onchange="handlePhotoSelect(event)">
+        <div id="photo-placeholder">
+          <div style="font-size:32px">📷</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:6px;font-weight:500">사진 찍기 또는 갤러리 선택</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:4px">찍으면 금액·가게명을 자동으로 입력해요</div>
+        </div>
+        <img id="photo-preview" class="photo-preview" style="display:none">
+      </div>
+      <div class="ai-loading" id="ai-loading" style="display:none">
+        <span>🤖 AI가 영수증을 분석하는 중</span>
+        <div class="dots"><span></span><span></span><span></span></div>
+      </div>
+      <div id="ai-result" style="display:none;margin-top:8px">
+        <div style="font-size:11px;color:var(--accent);margin-bottom:4px">✨ AI 인식 결과 (수정 가능)</div>
+      </div>
+    </div>
 
     <div class="type-toggle">
       <button class="type-btn" id="btn-expense" onclick="setType('expense')">💸 지출</button>
@@ -905,25 +1059,6 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
     <div class="form-group">
       <label class="form-label">메모 (선택)</label>
       <textarea class="form-textarea" id="tx-memo" placeholder="메모를 입력하세요"></textarea>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">영수증 사진 (선택)</label>
-      <div class="photo-upload" id="photo-upload-area">
-        <input type="file" accept="image/*" capture="environment" id="photo-input" onchange="handlePhotoSelect(event)">
-        <div id="photo-placeholder">
-          <div style="font-size:28px">📷</div>
-          <div style="font-size:12px;color:var(--text3);margin-top:4px">사진 찍기 또는 갤러리에서 선택</div>
-        </div>
-        <img id="photo-preview" class="photo-preview" style="display:none">
-      </div>
-      <div class="ai-loading" id="ai-loading" style="display:none">
-        <span>🤖 AI가 영수증을 분석하는 중</span>
-        <div class="dots"><span></span><span></span><span></span></div>
-      </div>
-      <div id="ai-result" style="display:none;margin-top:8px">
-        <div style="font-size:11px;color:var(--accent);margin-bottom:4px">✨ AI 인식 결과 (수정 가능)</div>
-      </div>
     </div>
 
     <button class="btn-primary" onclick="saveTransaction()">저장하기</button>
@@ -956,6 +1091,34 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
     </div>
     <button class="btn-primary" onclick="saveBudget()">저장</button>
     <button class="btn-secondary" onclick="closeModal('budget-modal')">취소</button>
+  </div>
+</div>
+
+<!-- RECEIPT GALLERY MODAL -->
+<div class="modal-backdrop" id="receipt-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div class="modal-title" style="margin:0">📷 영수증 갤러리</div>
+      <select class="form-select" id="receipt-month-select" onchange="renderReceiptGallery()" style="width:auto;padding:6px 10px;font-size:13px"></select>
+    </div>
+    <div id="receipt-gallery-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px"></div>
+    <div id="receipt-gallery-empty" style="display:none;text-align:center;padding:30px;color:var(--text3);font-size:13px">
+      <div style="font-size:40px;margin-bottom:8px">🗂️</div>
+      <p>이 달에 저장된 영수증이 없어요</p>
+    </div>
+    <button class="btn-secondary" style="background:rgba(255,80,80,0.1);border-color:var(--expense);color:var(--expense);margin-bottom:8px" onclick="deleteMonthReceipts()">🗑️ 이 달 영수증 전체 삭제</button>
+    <button class="btn-secondary" onclick="closeModal('receipt-modal')">닫기</button>
+  </div>
+</div>
+
+<!-- RECEIPT PREVIEW MODAL -->
+<div class="modal-backdrop" id="receipt-preview-modal">
+  <div class="modal" style="background:#000;padding:12px">
+    <div class="modal-handle" style="background:#444"></div>
+    <img id="receipt-preview-img" style="width:100%;border-radius:8px;max-height:70vh;object-fit:contain">
+    <div id="receipt-preview-info" style="color:#fff;font-size:13px;text-align:center;margin-top:10px"></div>
+    <button class="btn-secondary" onclick="closeModal('receipt-preview-modal')" style="margin-top:8px;border-color:#444;color:#aaa">닫기</button>
   </div>
 </div>
 
@@ -992,6 +1155,40 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
     <div id="detail-content"></div>
     <button class="btn-secondary" style="background:rgba(255,80,80,0.1);border-color:var(--expense);color:var(--expense)" onclick="deleteCurrentTx()">🗑️ 삭제</button>
     <button class="btn-secondary" onclick="closeModal('detail-modal')" style="margin-top:6px">닫기</button>
+  </div>
+</div>
+
+<!-- ALARM MODAL -->
+<div class="modal-backdrop" id="alarm-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">⏰ 가계부 기록 알림</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6">
+      매일 설정한 시간에 가계부 기록 알림을 받아요.<br>
+      <span style="color:var(--warning)">⚠️ 아이폰은 앱을 홈 화면에 추가한 후 Safari에서 열어야 알림이 작동해요.</span>
+    </div>
+    <div class="form-group">
+      <label class="form-label">알림 시간</label>
+      <input class="form-input" id="alarm-time-input" type="time" value="21:00">
+    </div>
+    <div class="form-group">
+      <label class="form-label">알림 메시지</label>
+      <input class="form-input" id="alarm-message-input" placeholder="가계부 기록할 시간이에요! 💰" value="가계부 기록할 시간이에요! 💰">
+    </div>
+    <button class="btn-primary" onclick="saveAlarm()">알림 설정</button>
+    <button class="btn-secondary" onclick="cancelAlarm()" style="margin-top:8px;color:var(--expense)">알림 취소</button>
+    <button class="btn-secondary" onclick="closeModal('alarm-modal')" style="margin-top:6px">닫기</button>
+  </div>
+</div>
+
+<!-- MONTHLY REPORT MODAL -->
+<div class="modal-backdrop" id="report-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">📋 월간 마감 리포트</div>
+    <div id="report-content"></div>
+    <button class="btn-primary" onclick="exportReportToExcel()" style="margin-top:8px">📥 Excel로 저장</button>
+    <button class="btn-secondary" onclick="closeModal('report-modal')" style="margin-top:8px">닫기</button>
   </div>
 </div>
 
@@ -1221,6 +1418,7 @@ function showApp() {
     hideAllScreens();
     document.getElementById('app').style.display = 'flex';
     initModalBackdrops();
+    loadAlarmSettings();
     renderCategoryGrid('expense');
     renderCategoryGrids();
     updateMonthLabel();
@@ -1393,9 +1591,11 @@ function renderAll() {
   renderHistoryPage();
   renderBudgetPage();
   renderRecurringList();
-  // Only render stats if that page is active
   if (document.getElementById('page-stats').classList.contains('active')) {
     renderStatsPage();
+  }
+  if (document.getElementById('page-calendar').classList.contains('active')) {
+    renderCalendarPage();
   }
 }
 
@@ -1727,6 +1927,8 @@ function openAddModal(tx = null) {
     document.getElementById('tx-name').value = '';
     document.getElementById('tx-date').value = new Date().toISOString().slice(0,10);
     document.getElementById('tx-memo').value = '';
+    document.getElementById('sms-paste-area').innerText = '';
+    document.getElementById('sms-result').style.display = 'none';
     selectedCategory = '';
   }
   renderCategoryGrid(currentTxType);
@@ -2074,10 +2276,11 @@ function switchPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  const navMap = { home:0, history:1, stats:2, budget:3, settings:4 };
+  const navMap = { home:0, history:1, stats:2, calendar:3, budget:4, settings:5 };
   document.querySelectorAll('.nav-item')[navMap[name]]?.classList.add('active');
   if (name === 'stats') renderStatsPage();
   if (name === 'history') renderHistoryPage();
+  if (name === 'calendar') renderCalendarPage();
   window.scrollTo(0, 0);
 }
 
@@ -2091,7 +2294,7 @@ function changeMonth(delta) {
 
 function updateMonthLabel() {
   const label = `${currentYear}년 ${currentMonth+1}월`;
-  ['month-label','month-label2','month-label3'].forEach(id => {
+  ['month-label','month-label2','month-label3','month-label4'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.textContent = label;
   });
@@ -2127,6 +2330,646 @@ function setGeminiKey() {
     document.getElementById('gemini-key-status').textContent = '영수증 AI 인식용';
     showToast('🗑️ 키 삭제됨');
   }
+}
+
+// ===== SMS PARSER =====
+function handleSmsPaste(e) {
+  setTimeout(() => {
+    const el = document.getElementById('sms-paste-area');
+    const text = el.innerText || el.textContent || '';
+    if (text.trim()) parseSmsText(text);
+  }, 50);
+}
+
+function handleSmsInput(el) {
+  const text = el.innerText || el.textContent || '';
+  if (text.length > 10) parseSmsText(text);
+}
+
+function parseSmsText(text) {
+  const result = extractPaymentInfo(text);
+  const resultEl = document.getElementById('sms-result');
+
+  if (!result) {
+    resultEl.style.display = 'none';
+    return;
+  }
+
+  // Fill form fields
+  if (result.amount > 0) document.getElementById('tx-amount').value = result.amount;
+  if (result.name) document.getElementById('tx-name').value = result.name;
+  if (result.date) document.getElementById('tx-date').value = result.date;
+  if (result.category) {
+    selectedCategory = result.category;
+    renderCategoryGrid(currentTxType);
+  }
+  setType('expense');
+
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = `
+    <div class="sms-result-badge">✨ 자동 인식됨</div>
+    <div style="font-size:11px;color:var(--text3);margin-top:4px">금액·가게명이 입력됐어요. 확인 후 저장하세요!</div>
+  `;
+}
+
+function extractPaymentInfo(text) {
+  let amount = 0;
+  let name = '';
+  let date = '';
+  let category = '';
+
+  // ===== 금액 파싱 =====
+  // 패턴: 12,345원 / 12345원 / 1만2천원 / 12,345 승인
+  const amountPatterns = [
+    /([0-9,]+)원\s*(결제|승인|사용|출금|이체)/,
+    /(결제|승인|사용|출금)\s*금액[:\s]*([0-9,]+)원/,
+    /([0-9,]+)원/,
+    /([0-9,]+)\s*원/,
+    /KRW\s*([0-9,]+)/,
+    /￦([0-9,]+)/,
+  ];
+
+  for (const pat of amountPatterns) {
+    const m = text.match(pat);
+    if (m) {
+      const raw = (m[2] || m[1]).replace(/,/g, '');
+      const parsed = parseInt(raw);
+      if (parsed > 100 && parsed < 100000000) {
+        amount = parsed;
+        break;
+      }
+    }
+  }
+
+  if (amount === 0) return null;
+
+  // ===== 가게명 파싱 =====
+  const namePatterns = [
+    // 카카오페이: [카카오페이] 스타벅스에서
+    /\[카카오페이\]\s*(.+?)에서/,
+    /\[카카오페이\]\s*(.+?)\s*[0-9]/,
+    // 토스: 토스머니 스타벅스 결제
+    /토스머니\s+(.+?)\s+(결제|승인)/,
+    /토스\s+(.+?)\s+(결제|승인)/,
+    // 신용카드: 가맹점명
+    /가맹점\s*[:]\s*([^\n]+)/,
+    /가맹점명\s*[:]\s*([^\n]+)/,
+    // 일반: XX에서 결제
+    /([가-힣a-zA-Z0-9 ]+)에서\s*(결제|승인)/,
+    // 삼성페이, 네이버페이
+    /삼성페이\s+(.+?)\s+(결제|승인)/,
+    /네이버페이\s+(.+?)\s+(결제|승인)/,
+    // 현대/신한/KB 카드
+    /현대카드\s+(.+?)\s+[0-9]/,
+    /신한카드\s+(.+?)\s+[0-9]/,
+    /KB카드\s+(.+?)\s+[0-9]/,
+    /하나카드\s+(.+?)\s+[0-9]/,
+    /롯데카드\s+(.+?)\s+[0-9]/,
+    /우리카드\s+(.+?)\s+[0-9]/,
+  ];
+
+  for (const pat of namePatterns) {
+    const m = text.match(pat);
+    if (m && m[1]) {
+      name = m[1].trim().replace(/\s+/g, ' ');
+      if (name.length > 1 && name.length < 30) break;
+    }
+  }
+
+  // ===== 날짜 파싱 =====
+  const now = new Date();
+  const datePatterns = [
+    /(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/,
+    /(\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/,
+    /(\d{1,2})월\s*(\d{1,2})일/,
+  ];
+
+  for (const pat of datePatterns) {
+    const m = text.match(pat);
+    if (m) {
+      if (m[3]) {
+        const y = m[1].length === 4 ? m[1] : '20' + m[1];
+        date = `${y}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+      } else {
+        const y = now.getFullYear();
+        date = `${y}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
+      }
+      break;
+    }
+  }
+
+  if (!date) {
+    date = now.toISOString().slice(0, 10);
+  }
+
+  // ===== 카테고리 자동 분류 =====
+  const catMap = [
+    { cat:'카페',   keywords:['스타벅스','카페','커피','투썸','이디야','빽다방','메가커피','할리스','폴바셋'] },
+    { cat:'식비',   keywords:['맥도날드','버거킹','롯데리아','KFC','배달','배민','요기요','쿠팡이츠','식당','음식','포장','피자','치킨','중국집','일식','한식','분식','도시락'] },
+    { cat:'마트',   keywords:['이마트','홈플러스','롯데마트','코스트코','마트','슈퍼','편의점','GS25','CU','세븐일레븐','올리브영'] },
+    { cat:'교통',   keywords:['주유','SK에너지','GS칼텍스','현대오일','지하철','버스','택시','카카오T','우버','기차','KTX','고속버스','주차'] },
+    { cat:'의료',   keywords:['병원','의원','약국','한의원','치과','안과','피부과','내과','외과','클리닉'] },
+    { cat:'문화',   keywords:['CGV','롯데시네마','메가박스','넷플릭스','유튜브','스포티파이','게임','인터파크','yes24'] },
+    { cat:'의류',   keywords:['무신사','지그재그','에이블리','자라','유니클로','H&M','나이키','아디다스','뉴발란스'] },
+    { cat:'교육',   keywords:['학원','교육','책','교재','YES24','알라딘','강의','수강'] },
+    { cat:'미용',   keywords:['헤어','미용','살롱','네일','뷰티','화장품','아모레','이니스프리'] },
+  ];
+
+  const lowerText = (name + ' ' + text).toLowerCase();
+  for (const { cat, keywords } of catMap) {
+    if (keywords.some(k => lowerText.includes(k.toLowerCase()))) {
+      category = cat;
+      break;
+    }
+  }
+  if (!category) category = '기타';
+
+  return { amount, name: name || '결제', date, category };
+}
+
+// ===== CALENDAR =====
+let selectedCalDay = null;
+
+function renderCalendarPage() {
+  const monthStr = getMonthStr();
+  const tx = getMonthTx();
+  const year = currentYear;
+  const month = currentMonth;
+
+  // Build day expense/income map
+  const dayMap = {};
+  tx.forEach(t => {
+    const day = parseInt(t.date.slice(8));
+    if (!dayMap[day]) dayMap[day] = { expense: 0, income: 0, items: [] };
+    if (t.type === 'expense') dayMap[day].expense += t.amount;
+    else dayMap[day].income += t.amount;
+    dayMap[day].items.push(t);
+  });
+
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = new Date();
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+  const todayDate = today.getDate();
+
+  // Calendar header
+  const dayNames = ['일','월','화','수','목','금','토'];
+  let html = '<div class="cal-header">';
+  dayNames.forEach(n => { html += `<div class="cal-day-name">${n}</div>`; });
+  html += '</div><div class="cal-grid">';
+
+  // Empty cells before first day
+  for (let i = 0; i < firstDay; i++) {
+    html += '<div class="cal-cell other-month"></div>';
+  }
+
+  // Day cells
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = (firstDay + d - 1) % 7;
+    const isToday = isCurrentMonth && d === todayDate;
+    const isSelected = d === selectedCalDay;
+    const data = dayMap[d];
+    const cls = [
+      'cal-cell',
+      isToday ? 'today' : '',
+      isSelected ? 'selected' : '',
+      dow === 0 ? 'sunday' : '',
+      dow === 6 ? 'saturday' : '',
+    ].filter(Boolean).join(' ');
+
+    html += `<div class="${cls}" onclick="selectCalDay(${d})">
+      <div class="cal-date">${d}</div>`;
+
+    if (data) {
+      if (data.expense > 0) {
+        html += `<div class="cal-amount">-${fmtMoneyShort(data.expense)}</div>`;
+        html += `<div class="cal-dot has-expense"></div>`;
+      }
+      if (data.income > 0) {
+        html += `<div class="cal-dot has-income"></div>`;
+      }
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  document.getElementById('calendar-grid').innerHTML = html;
+  document.getElementById('month-label4').textContent = `${year}년 ${month+1}월`;
+
+  // Show selected day detail
+  if (selectedCalDay && dayMap[selectedCalDay]) {
+    showCalDayDetail(selectedCalDay, dayMap[selectedCalDay]);
+  } else {
+    document.getElementById('calendar-day-detail').style.display = 'none';
+  }
+}
+
+function selectCalDay(day) {
+  const tx = getMonthTx();
+  const dayMap = {};
+  tx.forEach(t => {
+    const d = parseInt(t.date.slice(8));
+    if (!dayMap[d]) dayMap[d] = { expense: 0, income: 0, items: [] };
+    if (t.type === 'expense') dayMap[d].expense += t.amount;
+    else dayMap[d].income += t.amount;
+    dayMap[d].items.push(t);
+  });
+
+  if (selectedCalDay === day) {
+    selectedCalDay = null;
+    document.getElementById('calendar-day-detail').style.display = 'none';
+    renderCalendarPage();
+    return;
+  }
+  selectedCalDay = day;
+  renderCalendarPage();
+  if (dayMap[day]) showCalDayDetail(day, dayMap[day]);
+}
+
+function showCalDayDetail(day, data) {
+  const dow = new Date(currentYear, currentMonth, day).getDay();
+  const dayNames = ['일','월','화','수','목','금','토'];
+  document.getElementById('calendar-day-title').textContent =
+    `${currentMonth+1}월 ${day}일 (${dayNames[dow]})`;
+  document.getElementById('calendar-day-total').textContent =
+    data.expense > 0 ? `-${fmtMoney(data.expense)}` : '';
+  document.getElementById('calendar-day-list').innerHTML = renderTxItems(data.items);
+  document.getElementById('calendar-day-detail').style.display = 'block';
+}
+
+// ===== AI ANALYSIS =====
+async function runAIAnalysis() {
+  const apiKey = getGeminiKey();
+  if (!apiKey) {
+    const key = prompt('Gemini API Key를 입력하세요 (aistudio.google.com에서 무료 발급)');
+    if (!key) return;
+    localStorage.setItem('gemini_api_key', key.trim());
+    await runAIAnalysis();
+    return;
+  }
+
+  const resultEl = document.getElementById('ai-analysis-result');
+  resultEl.innerHTML = '<div class="ai-analysis-loading"><span>🤖 AI가 소비 패턴을 분석하는 중</span><div class="dots"><span></span><span></span><span></span></div></div>';
+
+  // Build spending summary
+  const tx = getMonthTx();
+  const prevTx = getPrevMonthTx();
+  const monthStr = getMonthStr();
+  const prevStr = getPrevMonthStr();
+
+  const catTotals = {};
+  tx.filter(t=>t.type==='expense').forEach(t => {
+    catTotals[t.category] = (catTotals[t.category]||0) + t.amount;
+  });
+  const prevCatTotals = {};
+  prevTx.filter(t=>t.type==='expense').forEach(t => {
+    prevCatTotals[t.category] = (prevCatTotals[t.category]||0) + t.amount;
+  });
+
+  const totalExpense = Object.values(catTotals).reduce((s,v)=>s+v,0);
+  const prevTotalExpense = Object.values(prevCatTotals).reduce((s,v)=>s+v,0);
+  const totalIncome = tx.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+
+  const budgets_this = budgets.filter(b=>b.month===monthStr);
+  const budgetSummary = budgets_this.map(b => {
+    const spent = catTotals[b.category] || 0;
+    const pct = Math.round((spent/b.amount)*100);
+    return `${b.category}: 예산 ${b.amount.toLocaleString()}원 중 ${spent.toLocaleString()}원 사용(${pct}%)`;
+  }).join(', ');
+
+  const catSummary = Object.entries(catTotals)
+    .sort((a,b)=>b[1]-a[1])
+    .map(([cat,amt]) => {
+      const prev = prevCatTotals[cat] || 0;
+      const diff = prev > 0 ? Math.round(((amt-prev)/prev)*100) : 0;
+      return `${cat}: ${amt.toLocaleString()}원${prev>0?` (전월 대비 ${diff>0?'+':''}${diff}%)` : ''}`;
+    }).join(', ');
+
+  const prompt_text = `당신은 가계부 AI 분석가입니다. 다음 가계 데이터를 분석해서 한국어로 친근하게 조언해주세요.
+
+이번달(${monthStr}) 요약:
+- 총 수입: ${totalIncome.toLocaleString()}원
+- 총 지출: ${totalExpense.toLocaleString()}원  
+- 잔액: ${(totalIncome-totalExpense).toLocaleString()}원
+- 전월(${prevStr}) 지출: ${prevTotalExpense.toLocaleString()}원
+- 카테고리별 지출: ${catSummary}
+- 예산 현황: ${budgetSummary || '예산 미설정'}
+
+다음 형식으로 분석해주세요 (각 항목 2-3문장):
+1. 이번달 소비 총평
+2. 잘한 점
+3. 개선할 점
+4. 다음달 절약 팁
+
+간결하고 실용적으로, 이모지 활용해서 읽기 쉽게 작성해주세요.`;
+
+  try {
+    const response = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt_text }] }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 600 }
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (data.error) {
+      resultEl.innerHTML = `<div class="ai-analysis-card"><div class="ai-analysis-text" style="color:var(--expense)">❌ 오류: ${data.error.message}</div></div>`;
+      return;
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    // Parse numbered sections
+    const sections = [
+      { key: '1.', label: '📊 이번달 총평' },
+      { key: '2.', label: '✅ 잘한 점' },
+      { key: '3.', label: '⚠️ 개선할 점' },
+      { key: '4.', label: '💡 절약 팁' },
+    ];
+
+    let html = '';
+    const lines = text.split('\n').filter(l => l.trim());
+
+    // Try to extract sections
+    let currentSection = '';
+    let currentContent = '';
+
+    lines.forEach(line => {
+      const sec = sections.find(s => line.includes(s.key));
+      if (sec) {
+        if (currentSection && currentContent) {
+          html += `<div class="ai-analysis-card">
+            <div class="ai-analysis-label">${currentSection}</div>
+            <div class="ai-analysis-text">${currentContent.trim()}</div>
+          </div>`;
+        }
+        currentSection = sec.label;
+        currentContent = line.replace(/^[0-9]+\.\s*/, '').replace(sec.label, '').trim();
+      } else if (currentSection) {
+        currentContent += ' ' + line;
+      }
+    });
+
+    if (currentSection && currentContent) {
+      html += `<div class="ai-analysis-card">
+        <div class="ai-analysis-label">${currentSection}</div>
+        <div class="ai-analysis-text">${currentContent.trim()}</div>
+      </div>`;
+    }
+
+    if (!html) {
+      // Fallback: show raw text
+      html = `<div class="ai-analysis-card"><div class="ai-analysis-text">${text.replace(/\n/g, '<br>')}</div></div>`;
+    }
+
+    html += `<div style="font-size:10px;color:var(--text3);text-align:right;margin-top:4px">Powered by Gemini AI</div>`;
+    resultEl.innerHTML = html;
+
+  } catch(e) {
+    resultEl.innerHTML = '<div class="ai-analysis-card"><div class="ai-analysis-text" style="color:var(--expense)">❌ 네트워크 오류가 발생했어요. 다시 시도해 주세요.</div></div>';
+  }
+}
+
+// ===== RECEIPT GALLERY =====
+function openReceiptGallery() {
+  // Populate month selector
+  const sel = document.getElementById('receipt-month-select');
+  const months = [];
+  const now = new Date();
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const val = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+    months.push(val);
+  }
+  sel.innerHTML = months.map(m => `<option value="${m}">${m.replace('-','년 ')}월</option>`).join('');
+  renderReceiptGallery();
+  openModal('receipt-modal');
+}
+
+function renderReceiptGallery() {
+  const month = document.getElementById('receipt-month-select').value;
+  const withPhotos = transactions.filter(t => t.date.startsWith(month) && t.photo_url && t.photo_url.startsWith('data:'));
+  const grid = document.getElementById('receipt-gallery-grid');
+  const empty = document.getElementById('receipt-gallery-empty');
+
+  if (!withPhotos.length) {
+    grid.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  grid.innerHTML = withPhotos.map(t => `
+    <div onclick="previewReceipt('${t.id}')" style="cursor:pointer;border-radius:8px;overflow:hidden;aspect-ratio:1;background:var(--surface2)">
+      <img src="${t.photo_url}" style="width:100%;height:100%;object-fit:cover">
+      <div style="padding:3px 4px;font-size:9px;color:var(--text3);background:var(--surface);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.name}</div>
+    </div>
+  `).join('');
+}
+
+function previewReceipt(id) {
+  const tx = transactions.find(t => t.id === id);
+  if (!tx || !tx.photo_url) return;
+  document.getElementById('receipt-preview-img').src = tx.photo_url;
+  document.getElementById('receipt-preview-info').textContent = `${tx.date} · ${tx.name} · ${fmtMoney(tx.amount)}`;
+  openModal('receipt-preview-modal');
+}
+
+async function deleteMonthReceipts() {
+  const month = document.getElementById('receipt-month-select').value;
+  if (!confirm(`${month.replace('-','년 ')}월 영수증 사진을 모두 삭제할까요?
+거래 내역은 유지됩니다.`)) return;
+
+  if (demoMode) {
+    let stored = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
+    stored = stored.map(t => t.date.startsWith(month) && t.photo_url ? { ...t, photo_url: null } : t);
+    localStorage.setItem('transactions_demo', JSON.stringify(stored));
+    transactions = stored;
+  } else if (sbClient) {
+    const ids = transactions.filter(t => t.date.startsWith(month) && t.photo_url).map(t => t.id);
+    for (const id of ids) {
+      await sbClient.from('transactions').update({ photo_url: null }).eq('id', id);
+    }
+    await loadData();
+  }
+  renderReceiptGallery();
+  showToast('🗑️ 영수증 사진 삭제 완료');
+}
+
+// ===== ALARM =====
+let alarmInterval = null;
+
+function loadAlarmSettings() {
+  const time = localStorage.getItem('alarm_time');
+  const msg = localStorage.getItem('alarm_message');
+  if (time) {
+    document.getElementById('alarm-time-display').textContent = `매일 ${time} 알림`;
+    document.getElementById('alarm-time-input').value = time;
+  }
+  if (msg) document.getElementById('alarm-message-input').value = msg;
+  if (time) scheduleAlarm(time, msg || '가계부 기록할 시간이에요! 💰');
+}
+
+function openAlarmModal() {
+  openModal('alarm-modal');
+}
+
+async function saveAlarm() {
+  const time = document.getElementById('alarm-time-input').value;
+  const msg = document.getElementById('alarm-message-input').value || '가계부 기록할 시간이에요! 💰';
+
+  // Request notification permission
+  if ('Notification' in window) {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') {
+      alert('알림 권한이 필요해요.\n설정 → Safari → 알림 허용으로 변경해 주세요.');
+      return;
+    }
+  } else {
+    alert('이 브라우저는 알림을 지원하지 않아요.');
+    return;
+  }
+
+  localStorage.setItem('alarm_time', time);
+  localStorage.setItem('alarm_message', msg);
+  document.getElementById('alarm-time-display').textContent = `매일 ${time} 알림`;
+  scheduleAlarm(time, msg);
+  closeModal('alarm-modal');
+  showToast(`✅ 매일 ${time}에 알림이 설정됐어요`);
+}
+
+function scheduleAlarm(time, msg) {
+  if (alarmInterval) clearInterval(alarmInterval);
+  alarmInterval = setInterval(() => {
+    const now = new Date();
+    const cur = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+    if (cur === time) {
+      new Notification('💰 우리집 가계부', {
+        body: msg,
+        icon: '/gagyebu/icon.png'
+      });
+    }
+  }, 30000); // Check every 30 seconds
+}
+
+function cancelAlarm() {
+  localStorage.removeItem('alarm_time');
+  localStorage.removeItem('alarm_message');
+  if (alarmInterval) { clearInterval(alarmInterval); alarmInterval = null; }
+  document.getElementById('alarm-time-display').textContent = '설정 안됨';
+  closeModal('alarm-modal');
+  showToast('🔕 알림이 취소됐어요');
+}
+
+// ===== MONTHLY REPORT =====
+function openMonthlyReport() {
+  const tx = getMonthTx();
+  const monthStr = getMonthStr();
+  const income = tx.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const expense = tx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const balance = income - expense;
+  const savingRate = income > 0 ? Math.round((balance/income)*100) : 0;
+
+  // Category breakdown
+  const catTotals = {};
+  tx.filter(t=>t.type==='expense').forEach(t => {
+    catTotals[t.category] = (catTotals[t.category]||0) + t.amount;
+  });
+  const sortedCats = Object.entries(catTotals).sort((a,b)=>b[1]-a[1]);
+
+  // Per person breakdown
+  const personTotals = {};
+  tx.filter(t=>t.type==='expense').forEach(t => {
+    const name = t.user_name || '미설정';
+    personTotals[name] = (personTotals[name]||0) + t.amount;
+  });
+
+  // Top spending day
+  const dayTotals = {};
+  tx.filter(t=>t.type==='expense').forEach(t => {
+    dayTotals[t.date] = (dayTotals[t.date]||0) + t.amount;
+  });
+  const topDay = Object.entries(dayTotals).sort((a,b)=>b[1]-a[1])[0];
+
+  // Budget status
+  const budgetsThis = budgets.filter(b=>b.month===monthStr);
+  const overBudget = budgetsThis.filter(b=>(catTotals[b.category]||0) > b.amount);
+
+  const html = `
+    <div style="text-align:center;padding:12px 0 16px;border-bottom:1px solid var(--border);margin-bottom:16px">
+      <div style="font-size:14px;color:var(--text3)">${monthStr.replace('-','년 ')}월 결산</div>
+      <div style="font-family:var(--font-display);font-size:28px;color:${balance>=0?'var(--income)':'var(--expense)'};font-weight:700;margin:6px 0">${fmtMoney(balance)}</div>
+      <div style="font-size:12px;color:var(--text3)">저축률 <strong style="color:var(--accent)">${savingRate}%</strong></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+      <div style="background:var(--surface2);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">💵 총 수입</div>
+        <div style="font-family:var(--font-mono);font-size:16px;font-weight:700;color:var(--income)">${fmtMoney(income)}</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">💸 총 지출</div>
+        <div style="font-family:var(--font-mono);font-size:16px;font-weight:700;color:var(--expense)">${fmtMoney(expense)}</div>
+      </div>
+    </div>
+
+    <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">📊 카테고리별 지출</div>
+    ${sortedCats.map(([cat,amt]) => {
+      const pct = expense > 0 ? Math.round((amt/expense)*100) : 0;
+      const emoji = [...CATEGORIES.expense,...CATEGORIES.income].find(c=>c.key===cat)?.emoji||'📦';
+      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <div style="width:28px;text-align:center">${emoji}</div>
+        <div style="flex:1">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+            <span style="color:var(--text)">${cat}</span>
+            <span style="font-family:var(--font-mono);color:var(--expense)">${fmtMoney(amt)}</span>
+          </div>
+          <div style="height:4px;background:var(--bg3);border-radius:2px">
+            <div style="height:100%;width:${pct}%;background:var(--accent);border-radius:2px"></div>
+          </div>
+        </div>
+        <div style="font-size:10px;color:var(--text3);width:28px;text-align:right">${pct}%</div>
+      </div>`;
+    }).join('')}
+
+    ${Object.keys(personTotals).length > 1 ? `
+    <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin:12px 0 8px">👫 인별 지출</div>
+    ${Object.entries(personTotals).map(([name,amt]) => `
+      <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px">
+        <span style="font-size:13px;color:var(--text)">${name}</span>
+        <span style="font-family:var(--font-mono);font-size:13px;color:var(--expense)">${fmtMoney(amt)}</span>
+      </div>`).join('')}` : ''}
+
+    ${topDay ? `
+    <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin:12px 0 8px">🔥 최다 지출일</div>
+    <div style="padding:10px 14px;background:var(--surface2);border-radius:8px;display:flex;justify-content:space-between">
+      <span style="font-size:13px;color:var(--text)">${topDay[0]}</span>
+      <span style="font-family:var(--font-mono);font-size:13px;color:var(--expense)">${fmtMoney(topDay[1])}</span>
+    </div>` : ''}
+
+    ${overBudget.length > 0 ? `
+    <div style="margin-top:12px;padding:10px 14px;background:rgba(255,107,107,0.1);border:1px solid var(--expense);border-radius:8px">
+      <div style="font-size:12px;font-weight:700;color:var(--expense);margin-bottom:4px">⚠️ 예산 초과 항목</div>
+      ${overBudget.map(b => `<div style="font-size:12px;color:var(--text2)">${b.category}: 예산 ${fmtMoney(b.amount)} → 실지출 ${fmtMoney(catTotals[b.category])}</div>`).join('')}
+    </div>` : `
+    <div style="margin-top:12px;padding:10px 14px;background:rgba(78,205,196,0.1);border:1px solid var(--income);border-radius:8px;font-size:12px;color:var(--income)">
+      ✅ 모든 카테고리 예산 내에서 지출했어요!
+    </div>`}
+    <div style="font-size:10px;color:var(--text3);text-align:center;margin-top:12px">총 거래 ${tx.length}건</div>
+  `;
+
+  document.getElementById('report-content').innerHTML = html;
+  openModal('report-modal');
+}
+
+function exportReportToExcel() {
+  exportToExcel();
+  closeModal('report-modal');
 }
 
 function fmtMoney(n) { return '₩' + Number(n).toLocaleString('ko-KR'); }
