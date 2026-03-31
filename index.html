@@ -761,6 +761,25 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
     <div class="tx-list" id="tx-list"></div>
   </div>
 
+  <!-- CALENDAR -->
+  <div class="page" id="page-calendar">
+    <div class="month-selector">
+      <button class="month-btn" onclick="changeMonth(-1)">‹</button>
+      <div class="month-label" id="month-label4">2026년 3월</div>
+      <button class="month-btn" onclick="changeMonth(1)">›</button>
+    </div>
+    <div class="card" style="padding:12px">
+      <div id="calendar-grid"></div>
+    </div>
+    <div id="calendar-day-detail" style="display:none">
+      <div class="card-header" style="padding:4px 4px 0">
+        <div class="card-title" id="calendar-day-title">3월 1일</div>
+        <div id="calendar-day-total" style="font-family:var(--font-mono);font-size:13px;color:var(--expense)"></div>
+      </div>
+      <div class="tx-list" id="calendar-day-list" style="margin-top:8px"></div>
+    </div>
+  </div>
+
   <!-- STATS -->
   <div class="page" id="page-stats">
     <div class="month-selector">
@@ -778,16 +797,16 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
 
     <div class="card">
       <div class="card-header">
-        <div class="card-title">월별 지출 추이</div>
+        <div class="card-title">일별 지출</div>
       </div>
-      <div class="chart-wrap-lg"><canvas id="bar-chart"></canvas></div>
+      <div class="chart-wrap-lg"><canvas id="line-chart"></canvas></div>
     </div>
 
     <div class="card">
       <div class="card-header">
-        <div class="card-title">일별 지출</div>
+        <div class="card-title">월별 지출 추이</div>
       </div>
-      <div class="chart-wrap-lg"><canvas id="line-chart"></canvas></div>
+      <div class="chart-wrap-lg"><canvas id="bar-chart"></canvas></div>
     </div>
 
     <div class="card">
@@ -800,25 +819,6 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
           '분석하기'를 눌러 이번달 소비 패턴을 AI가 분석해 드려요
         </div>
       </div>
-    </div>
-  </div>
-
-  <!-- CALENDAR -->
-  <div class="page" id="page-calendar">
-    <div class="month-selector">
-      <button class="month-btn" onclick="changeMonth(-1)">‹</button>
-      <div class="month-label" id="month-label4">2026년 3월</div>
-      <button class="month-btn" onclick="changeMonth(1)">›</button>
-    </div>
-    <div class="card" style="padding:12px">
-      <div id="calendar-grid"></div>
-    </div>
-    <div id="calendar-day-detail" style="display:none">
-      <div class="card-header" style="padding:4px 4px 0">
-        <div class="card-title" id="calendar-day-title">3월 1일</div>
-        <div id="calendar-day-total" style="font-family:var(--font-mono);font-size:13px;color:var(--expense)"></div>
-      </div>
-      <div class="tx-list" id="calendar-day-list" style="margin-top:8px"></div>
     </div>
   </div>
 
@@ -972,11 +972,11 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
     <div class="nav-item" onclick="switchPage('history')">
       <div class="nav-icon">📋</div><span>내역</span>
     </div>
-    <div class="nav-item" onclick="switchPage('stats')">
-      <div class="nav-icon">📊</div><span>통계</span>
-    </div>
     <div class="nav-item" onclick="switchPage('calendar')">
       <div class="nav-icon">📅</div><span>달력</span>
+    </div>
+    <div class="nav-item" onclick="switchPage('stats')">
+      <div class="nav-icon">📊</div><span>통계</span>
     </div>
     <div class="nav-item" onclick="switchPage('budget')">
       <div class="nav-icon">💼</div><span>예산</span>
@@ -2276,7 +2276,7 @@ function switchPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  const navMap = { home:0, history:1, stats:2, calendar:3, budget:4, settings:5 };
+  const navMap = { home:0, history:1, calendar:2, stats:3, budget:4, settings:5 };
   document.querySelectorAll('.nav-item')[navMap[name]]?.classList.add('active');
   if (name === 'stats') renderStatsPage();
   if (name === 'history') renderHistoryPage();
