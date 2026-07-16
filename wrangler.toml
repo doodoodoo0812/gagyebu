@@ -1,0 +1,30 @@
+# Cloudflare Workers 배포 설정 (운영: gagyebu)
+#   배포:        npx wrangler deploy
+#   스키마 적용: npx wrangler d1 execute gagyebu --remote --file=schema.sql
+name = "gagyebu"
+main = "_worker.js"
+# 설치된 wrangler(4.85.0)의 로컬 런타임이 지원하는 최신 날짜. 더 뒤로 잡으면 wrangler dev가 뜨지 않는다.
+# 이 Worker가 쓰는 기능(crypto.subtle·D1·정적 자산)은 모두 이 날짜 이전부터 있던 것이라 올릴 이유가 없다.
+compatibility_date = "2026-05-01"
+
+# ──────── 정적 파일 (앱) ────────
+#  artclass는 directory="./"로 폴더 전체를 올리지만, 그러면 _worker.js·schema.sql까지
+#  공개 주소로 받아갈 수 있다. 앱만 public/에 두고 그 폴더만 노출한다.
+#  (루트 index.html은 옛 GitHub Pages 주소용 이사 안내 페이지 — 배포에 포함되지 않는다)
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# ──────── D1 (거래·예산 저장소) ────────
+#  Supabase 무료 플랜은 7일만 안 써도 정지되고 90일이 지나면 복구조차 안 된다.
+#  실제로 2026-07-16에 그 일이 벌어져 기존 프로젝트를 되살리지 못했다. D1은 정지가 없다.
+[[d1_databases]]
+binding = "DB"
+database_name = "gagyebu"
+database_id = "e9475fb8-a10b-4fe5-adee-1e6645b56dab"
+
+# ──────── 비밀값 ────────
+# ⚠️ 여기에 적지 말 것. Cloudflare secret으로 관리한다.
+#     npx wrangler secret put APP_PASSWORD     # 부부 공유 비밀번호
+#     npx wrangler secret put SESSION_SECRET   # 세션 토큰 서명키(아무 긴 랜덤 문자열)
+#  APP_PASSWORD를 잊으면 앱에 못 들어간다. SESSION_SECRET을 바꾸면 모든 기기가 로그아웃된다.

@@ -1,0 +1,9 @@
+# 로컬 개발용 비밀값 (wrangler dev 전용) — 절대 커밋 금지.
+# 운영 비밀값은 여기가 아니라 Cloudflare secret으로 관리한다:
+#   npx wrangler secret put APP_PASSWORD
+#   npx wrangler secret put SESSION_SECRET
+.dev.vars
+
+# wrangler 작업 파일 (로컬 D1 사본 등)
+.wrangler/
+node_modules/
