@@ -755,7 +755,7 @@ CREATE POLICY "Allow all" ON budgets FOR ALL USING (true);</div>
     </div>
 
     <div class="tab-bar" id="category-filter-tabs">
-      <div class="tab-item active" data-cat="전체" onclick="filterByCategory(this,'전체')">전체</div>
+      <div class="tab-item active" data-cat="전체" onclick="filterByCategory(this)">전체</div>
     </div>
 
     <div class="tx-list" id="tx-list"></div>
@@ -1354,19 +1354,13 @@ async function initApp() {
     // Check kakao redirect code
     const redirected = await handleKakaoRedirect();
     if (redirected) {
-      if (cfg) {
-        try { await initSupabase(cfg.url, cfg.key); } catch(e) {}
-      }
-      showApp();
+      await enterAppOrSetup(cfg);
       return;
     }
 
     // Check if already logged in
     if (localStorage.getItem('kakao_logged_in') === 'true') {
-      if (cfg) {
-        try { await initSupabase(cfg.url, cfg.key); } catch(e) {}
-      }
-      showApp();
+      await enterAppOrSetup(cfg);
       return;
     }
 
@@ -1437,6 +1431,16 @@ function showApp() {
     hideAllScreens();
     document.getElementById('app').style.display = 'flex';
   }
+}
+
+// 데모도 아니고 클라우드 연결도 없으면 입력한 게 어디에도 저장되지 않는다.
+// 그 상태로 앱을 열어주면 사용자는 저장되는 줄 알고 계속 쓰게 되므로 설정 화면으로 보낸다.
+async function enterAppOrSetup(cfg) {
+  if (cfg) {
+    try { await initSupabase(cfg.url, cfg.key); } catch(e) { console.error(e); }
+  }
+  if (!demoMode && !sbClient) { openSetupScreen(); return; }
+  showApp();
 }
 
 async function saveSupabaseConfig() {
@@ -1574,17 +1578,23 @@ async function loadData() {
     budgets = JSON.parse(localStorage.getItem('budgets_demo') || '[]');
   } else if (sbClient) {
     const monthStr = getMonthStr();
-    const prevMonthStr = getPrevMonthStr();
-    const { data: tx } = await sbClient.from('transactions')
+    // 상한은 '다음 달 1일 미만'으로 잡는다. '-31'은 30일 달과 2월에 없는 날짜라 Postgres가 쿼리를 거부한다.
+    // 하한은 5개월 전 1일. 통계의 '월별 지출 추이'가 6개월을 그리고 전월 비교도 이 배열을 쓰기 때문.
+    const { data: tx, error: txErr } = await sbClient.from('transactions')
       .select('*')
-      .gte('date', prevMonthStr + '-01')
-      .lte('date', monthStr + '-31')
+      .gte('date', monthStrOffset(-5) + '-01')
+      .lt('date', getNextMonthStr() + '-01')
       .order('date', { ascending: false });
+    if (txErr) { showToast('❌ 불러오기 실패: ' + txErr.message); return; }
     transactions = tx || [];
-    const { data: bud } = await sbClient.from('budgets').select('*').eq('month', monthStr);
+    const { data: bud, error: budErr } = await sbClient.from('budgets').select('*').eq('month', monthStr);
+    if (budErr) { showToast('❌ 예산 불러오기 실패: ' + budErr.message); return; }
     budgets = bud || [];
+  } else {
+    showToast('⚠️ 연결된 저장소가 없어요. 설정에서 연결해 주세요');
+    return;
   }
-  applyRecurring();
+  await applyRecurring();
   renderAll();
 }
 
@@ -1609,11 +1619,23 @@ function renderAll() {
   }
 }
 
-function getMonthStr() { return `${currentYear}-${String(currentMonth+1).padStart(2,'0')}`; }
-function getPrevMonthStr() {
-  let m = currentMonth - 1, y = currentYear;
-  if (m < 0) { m = 11; y--; }
+function monthStrOffset(delta) {
+  let m = currentMonth + delta, y = currentYear;
+  y += Math.floor(m / 12);
+  m = ((m % 12) + 12) % 12;
   return `${y}-${String(m+1).padStart(2,'0')}`;
+}
+function getMonthStr() { return monthStrOffset(0); }
+function getPrevMonthStr() { return monthStrOffset(-1); }
+function getNextMonthStr() { return monthStrOffset(1); }
+
+// 공유 DB에서 온 값은 남이 넣은 값일 수 있으므로 innerHTML에 넣기 전 반드시 이스케이프
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+// img src에는 형식이 온전한 이미지 data URL만 허용
+function safePhoto(u) {
+  return (typeof u === 'string' && /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(u)) ? u : '';
 }
 
 function getMonthTx() {
@@ -1690,8 +1712,8 @@ function renderHistoryPage() {
   // Category filter tabs
   const cats = ['전체', ...new Set(tx.map(t=>t.category))];
   const tabHTML = cats.map(c => `
-    <div class="tab-item ${c===selectedCategoryFilter?'active':''}" 
-         data-cat="${c}" onclick="filterByCategory(this,'${c}')">${c}</div>
+    <div class="tab-item ${c===selectedCategoryFilter?'active':''}"
+         data-cat="${esc(c)}" onclick="filterByCategory(this)">${esc(c)}</div>
   `).join('');
   document.getElementById('category-filter-tabs').innerHTML = tabHTML;
 
@@ -1711,24 +1733,24 @@ function renderHistoryPage() {
   document.getElementById('tx-list').innerHTML = html || '<div class="empty-state"><div class="empty-icon">📭</div><p>거래 내역이 없어요</p></div>';
 }
 
-function filterByCategory(el, cat) {
-  selectedCategoryFilter = cat;
-  document.querySelectorAll('#category-filter-tabs .tab-item').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll(`[data-cat="${cat}"]`).forEach(t => t.classList.add('active'));
-  renderHistoryPage();
+// 카테고리를 onclick 문자열로 넘기지 않고 dataset에서 읽는다.
+// 따옴표가 든 카테고리명이 onclick 속성의 JS 문자열을 깨고 나오는 것을 막기 위함.
+function filterByCategory(el) {
+  selectedCategoryFilter = el.dataset.cat;
+  renderHistoryPage(); // 탭의 active 표시는 여기서 다시 그리며 반영된다
 }
 
 function renderTxItems(items) {
   if (!items.length) return '<div class="empty-state"><div class="empty-icon">📭</div><p>내역이 없어요</p></div>';
   return items.map(t => {
     const cat = [...CATEGORIES.expense,...CATEGORIES.income].find(c=>c.key===t.category);
-    return `<div class="tx-item" onclick="openDetail('${t.id}')">
+    return `<div class="tx-item" data-id="${esc(t.id)}" onclick="openDetail(this.dataset.id)">
       <div class="tx-icon">${cat?.emoji||'📦'}</div>
       <div class="tx-info">
-        <div class="tx-name">${t.name}</div>
-        <div class="tx-meta">${t.category} ${t.user_name?'· '+t.user_name:''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}</div>
+        <div class="tx-name">${esc(t.name)}</div>
+        <div class="tx-meta">${esc(t.category)} ${t.user_name?'· '+esc(t.user_name):''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}</div>
       </div>
-      <div class="tx-amount ${t.type}">${t.type==='expense'?'-':'+'}<span style="font-family:var(--font-mono)">${fmtMoney(t.amount)}</span></div>
+      <div class="tx-amount ${t.type==='expense'?'expense':'income'}">${t.type==='expense'?'-':'+'}<span style="font-family:var(--font-mono)">${fmtMoney(t.amount)}</span></div>
       ${t.photo_url?'<div class="tx-has-photo">📷</div>':''}
     </div>`;
   }).join('');
@@ -1833,7 +1855,7 @@ function renderBudgetPage() {
       const cat = CATEGORIES.expense.find(c=>c.key===b.category);
       html += `<div class="card" style="margin-bottom:10px">
         <div class="card-header">
-          <div style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--text)">${cat?.emoji||'📦'} ${b.category}</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--text)">${cat?.emoji||'📦'} ${esc(b.category)}</div>
           <div style="font-size:11px;color:var(--text3)">${pct}%</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:8px">
@@ -1856,7 +1878,7 @@ function renderRecurringList() {
       <div class="settings-item-left">
         <div class="settings-item-icon">${CATEGORIES.expense.find(c=>c.key===r.category)?.emoji||'📦'}</div>
         <div>
-          <div class="settings-item-text">${r.name}</div>
+          <div class="settings-item-text">${esc(r.name)}</div>
           <div class="settings-item-sub">매월 ${r.day}일 · ${fmtMoney(r.amount)}</div>
         </div>
       </div>
@@ -2013,12 +2035,15 @@ async function saveTransaction() {
     localStorage.setItem('transactions_demo', JSON.stringify(stored));
     transactions = stored;
   } else if (sbClient) {
-    if (currentEditTx) {
-      await sbClient.from('transactions').update(tx).eq('id', currentEditTx.id);
-    } else {
-      await sbClient.from('transactions').insert([tx]);
-    }
+    // supabase-js는 실패해도 throw하지 않고 {error}를 돌려준다. 확인하지 않으면 유실을 성공으로 보고하게 된다.
+    const { error } = currentEditTx
+      ? await sbClient.from('transactions').update(tx).eq('id', currentEditTx.id)
+      : await sbClient.from('transactions').insert([tx]);
+    if (error) { showToast('❌ 저장 실패: ' + error.message); return; }
     await loadData();
+  } else {
+    showToast('❌ 저장할 곳이 없어요. 설정에서 클라우드를 연결해 주세요');
+    return;
   }
 
   closeModal('add-modal');
@@ -2154,12 +2179,12 @@ function openDetail(id) {
   document.getElementById('detail-content').innerHTML = `
     <div style="text-align:center;margin-bottom:20px">
       <div style="font-size:48px;margin-bottom:8px">${cat?.emoji||'📦'}</div>
-      <div style="font-size:20px;font-weight:700;color:var(--text)">${tx.name}</div>
-      <div style="font-family:var(--font-mono);font-size:28px;font-weight:700;color:var(--${tx.type});margin:8px 0">${tx.type==='expense'?'-':'+'} ${fmtMoney(tx.amount)}</div>
-      <div style="font-size:12px;color:var(--text3)">${tx.date} · ${tx.category} ${tx.user_name?'· '+tx.user_name:''}</div>
+      <div style="font-size:20px;font-weight:700;color:var(--text)">${esc(tx.name)}</div>
+      <div style="font-family:var(--font-mono);font-size:28px;font-weight:700;color:var(--${tx.type==='expense'?'expense':'income'});margin:8px 0">${tx.type==='expense'?'-':'+'} ${fmtMoney(tx.amount)}</div>
+      <div style="font-size:12px;color:var(--text3)">${esc(tx.date)} · ${esc(tx.category)} ${tx.user_name?'· '+esc(tx.user_name):''}</div>
     </div>
-    ${tx.memo?`<div class="card" style="margin-bottom:12px"><div style="font-size:12px;color:var(--text2)">📝 ${tx.memo}</div></div>`:''}
-    ${tx.photo_url && tx.photo_url.startsWith('data:')?`<img src="${tx.photo_url}" style="width:100%;border-radius:var(--radius-sm);margin-bottom:12px">` : tx.photo_url ? `<div class="card" style="margin-bottom:12px;text-align:center;color:var(--text3);font-size:13px">📷 사진 첨부됨</div>` : ''}
+    ${tx.memo?`<div class="card" style="margin-bottom:12px"><div style="font-size:12px;color:var(--text2)">📝 ${esc(tx.memo)}</div></div>`:''}
+    ${safePhoto(tx.photo_url)?`<img src="${safePhoto(tx.photo_url)}" style="width:100%;border-radius:var(--radius-sm);margin-bottom:12px">` : tx.photo_url ? `<div class="card" style="margin-bottom:12px;text-align:center;color:var(--text3);font-size:13px">📷 사진 첨부됨</div>` : ''}
     <button class="btn-secondary" onclick="closeModal('detail-modal');openAddModal(currentEditTx)" style="margin-bottom:8px">✏️ 수정</button>
   `;
   openModal('detail-modal');
@@ -2174,8 +2199,12 @@ async function deleteCurrentTx() {
     localStorage.setItem('transactions_demo', JSON.stringify(stored));
     transactions = stored;
   } else if (sbClient) {
-    await sbClient.from('transactions').delete().eq('id', currentEditTx.id);
+    const { error } = await sbClient.from('transactions').delete().eq('id', currentEditTx.id);
+    if (error) { showToast('❌ 삭제 실패: ' + error.message); return; }
     await loadData();
+  } else {
+    showToast('❌ 연결된 저장소가 없어요');
+    return;
   }
   closeModal('detail-modal');
   renderAll();
@@ -2201,9 +2230,14 @@ async function saveBudget() {
     localStorage.setItem('budgets_demo', JSON.stringify(stored));
     budgets = stored;
   } else if (sbClient) {
-    await sbClient.from('budgets').upsert([bud], { onConflict: 'month,category' });
-    const { data } = await sbClient.from('budgets').select('*').eq('month', monthStr);
+    const { error } = await sbClient.from('budgets').upsert([bud], { onConflict: 'month,category' });
+    if (error) { showToast('❌ 예산 저장 실패: ' + error.message); return; }
+    const { data, error: readErr } = await sbClient.from('budgets').select('*').eq('month', monthStr);
+    if (readErr) { showToast('❌ 예산 불러오기 실패: ' + readErr.message); return; }
     budgets = data || [];
+  } else {
+    showToast('❌ 저장할 곳이 없어요. 설정에서 클라우드를 연결해 주세요');
+    return;
   }
   closeModal('budget-modal');
   renderBudgetPage();
@@ -2234,27 +2268,44 @@ function deleteRecurring(i) {
 }
 
 // Auto-apply recurring on month start
-function applyRecurring() {
+// 반드시 '실제 이번 달'에만 등록한다. 보고 있는 달(currentMonth) 기준으로 등록하면
+// 과거/미래 달을 넘겨볼 때마다 그 달에 없던 거래가 DB에 영구히 쌓인다.
+async function applyRecurring() {
   const today = new Date();
-  recurringItems.forEach(async r => {
-    const dateStr = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(r.day).padStart(2,'0')}`;
+  if (currentYear !== today.getFullYear() || currentMonth !== today.getMonth()) return;
+  const lastDay = new Date(currentYear, currentMonth + 1, 0).getDate();
+  for (const r of recurringItems) {
+    const day = Math.min(r.day, lastDay); // 31일 정기지출이 30일 달에서 없는 날짜가 되지 않도록
+    const dateStr = `${getMonthStr()}-${String(day).padStart(2,'0')}`;
     const exists = transactions.find(t=>t.name===r.name && t.date===dateStr && t.is_recurring);
-    if (!exists && today.getDate() >= r.day) {
-      const tx = { date: dateStr, type: 'expense', category: r.category, name: r.name, amount: r.amount, memo: '자동 등록', is_recurring: true, user_name: '' };
-      if (demoMode) {
-        const stored = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
-        stored.push({ ...tx, id: 'rec_' + Date.now() + Math.random() });
-        localStorage.setItem('transactions_demo', JSON.stringify(stored));
-      } else if (sbClient) {
-        await sbClient.from('transactions').insert([tx]);
-      }
+    if (exists || today.getDate() < day) continue;
+    const tx = { date: dateStr, type: 'expense', category: r.category, name: r.name, amount: r.amount, memo: '자동 등록', is_recurring: true, user_name: '' };
+    if (demoMode) {
+      const stored = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
+      stored.push({ ...tx, id: 'rec_' + Date.now() + Math.random() });
+      localStorage.setItem('transactions_demo', JSON.stringify(stored));
+      transactions = stored;
+    } else if (sbClient) {
+      const { data, error } = await sbClient.from('transactions').insert([tx]).select();
+      if (error) { console.warn('정기 지출 자동 등록 실패:', error.message); continue; }
+      if (data && data[0]) transactions.push(data[0]);
     }
-  });
+  }
 }
 
 // ===== EXPORT =====
 function exportToExcel() { exportExcel(getMonthTx(), `가계부_${getMonthStr()}`); }
-function exportAllToExcel() { exportExcel(transactions, '가계부_전체'); }
+
+// 메모리의 transactions에는 6개월치만 들어있다. '전체'를 자처하는 파일이 일부만 담으면
+// 백업으로 믿고 쓰다가 데이터를 잃으므로, 클라우드에서 전 기간을 직접 가져온다.
+async function exportAllToExcel() {
+  if (demoMode) { exportExcel(transactions, '가계부_전체'); return; }
+  if (!sbClient) { showToast('❌ 연결된 저장소가 없어요'); return; }
+  showToast('⏳ 전체 데이터를 불러오는 중…');
+  const { data, error } = await sbClient.from('transactions').select('*').order('date', { ascending: false });
+  if (error) { showToast('❌ 불러오기 실패: ' + error.message); return; }
+  exportExcel(data || [], '가계부_전체');
+}
 
 function exportExcel(data, filename) {
   if (!data.length) { showToast('내보낼 데이터가 없어요'); return; }
@@ -2268,11 +2319,11 @@ function exportExcel(data, filename) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '가계부');
 
-  // Summary sheet
-  const monthStr = getMonthStr();
-  const mTx = data.filter(t=>t.date.startsWith(monthStr));
-  const totalIncome = mTx.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
-  const totalExpense = mTx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  // Summary sheet — 넘겨받은 데이터를 그대로 합산한다.
+  // 월별 내보내기는 이미 그 달치만 넘기므로 두 호출자 모두 맞다.
+  // 현재 월로 다시 거르면 '전체' 파일의 요약이 한 달치만 집계된다.
+  const totalIncome = data.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const totalExpense = data.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
   const summary = [['항목','금액'],['총 수입', totalIncome],['총 지출', totalExpense],['잔액', totalIncome-totalExpense]];
   const ws2 = XLSX.utils.aoa_to_sheet(summary);
   XLSX.utils.book_append_sheet(wb, ws2, '요약');
@@ -2764,7 +2815,7 @@ function openReceiptGallery() {
 
 function renderReceiptGallery() {
   const month = document.getElementById('receipt-month-select').value;
-  const withPhotos = transactions.filter(t => t.date.startsWith(month) && t.photo_url && t.photo_url.startsWith('data:'));
+  const withPhotos = transactions.filter(t => t.date.startsWith(month) && safePhoto(t.photo_url));
   const grid = document.getElementById('receipt-gallery-grid');
   const empty = document.getElementById('receipt-gallery-empty');
 
@@ -2775,9 +2826,9 @@ function renderReceiptGallery() {
   }
   empty.style.display = 'none';
   grid.innerHTML = withPhotos.map(t => `
-    <div onclick="previewReceipt('${t.id}')" style="cursor:pointer;border-radius:8px;overflow:hidden;aspect-ratio:1;background:var(--surface2)">
-      <img src="${t.photo_url}" style="width:100%;height:100%;object-fit:cover">
-      <div style="padding:3px 4px;font-size:9px;color:var(--text3);background:var(--surface);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.name}</div>
+    <div data-id="${esc(t.id)}" onclick="previewReceipt(this.dataset.id)" style="cursor:pointer;border-radius:8px;overflow:hidden;aspect-ratio:1;background:var(--surface2)">
+      <img src="${safePhoto(t.photo_url)}" style="width:100%;height:100%;object-fit:cover">
+      <div style="padding:3px 4px;font-size:9px;color:var(--text3);background:var(--surface);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.name)}</div>
     </div>
   `).join('');
 }
@@ -2965,7 +3016,7 @@ function openMonthlyReport() {
     ${overBudget.length > 0 ? `
     <div style="margin-top:12px;padding:10px 14px;background:rgba(255,107,107,0.1);border:1px solid var(--expense);border-radius:8px">
       <div style="font-size:12px;font-weight:700;color:var(--expense);margin-bottom:4px">⚠️ 예산 초과 항목</div>
-      ${overBudget.map(b => `<div style="font-size:12px;color:var(--text2)">${b.category}: 예산 ${fmtMoney(b.amount)} → 실지출 ${fmtMoney(catTotals[b.category])}</div>`).join('')}
+      ${overBudget.map(b => `<div style="font-size:12px;color:var(--text2)">${esc(b.category)}: 예산 ${fmtMoney(b.amount)} → 실지출 ${fmtMoney(catTotals[b.category])}</div>`).join('')}
     </div>` : `
     <div style="margin-top:12px;padding:10px 14px;background:rgba(78,205,196,0.1);border:1px solid var(--income);border-radius:8px;font-size:12px;color:var(--income)">
       ✅ 모든 카테고리 예산 내에서 지출했어요!
