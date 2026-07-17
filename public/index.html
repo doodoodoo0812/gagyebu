@@ -6,9 +6,13 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="가계부">
-<meta name="theme-color" content="#1a1a2e">
-<link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
+<!-- manifest의 theme_color/background_color와 같은 값이어야 한다. 어긋나면 앱 실행 시 색이 한 번 튄다. -->
+<meta name="theme-color" content="#0f1628">
+<link rel="manifest" href="/manifest.json">
+<!-- 아이폰 홈 화면 아이콘. 이 파일이 없으면(예전엔 404였다) iOS가 아이콘 자리에
+     페이지 스크린샷을 박아넣는다. iOS는 manifest의 icons가 아니라 이걸 본다. -->
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512.png">
 <title>우리집 가계부</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -468,6 +472,11 @@ body {
   min-height: 100vh; padding: 32px 24px; text-align: center; gap: 16px;
   background: var(--bg);
 }
+/* PC에서 로그인 화면이 화면 끝까지 늘어나던 문제.
+   #app은 max-width:430px로 가운데 정렬되는데 로그인 화면에만 그 제한이 없어서,
+   넓은 모니터에서 카드가 1800px까지 벌어져 앱 본체와 전혀 다른 화면처럼 보였다.
+   앱과 같은 430px로 맞춘다. */
+.login-screen > * { width: 100%; max-width: 430px; }
 .login-logo { font-family: var(--font-display); font-size: 48px; color: var(--accent); margin-bottom: 4px; }
 .login-title { font-size: 22px; font-weight: 700; color: var(--text); }
 .login-sub { font-size: 14px; color: var(--text2); line-height: 1.6; }
