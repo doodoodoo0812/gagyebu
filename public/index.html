@@ -2,9 +2,15 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!-- maximum-scale=1.0, user-scalable=no 를 제거했다. 앱 곳곳에 8~11px 글자(캘린더 금액 등)가 있는데
+     확대를 막으면 노안인 사용자는 읽을 방법이 아예 없다. 대신 .form-input 폰트를 16px로 올려
+     iOS가 입력칸을 탭할 때 멋대로 확대하는 것을 막는다(둘은 반드시 같이 가야 한다).
+     viewport-fit=cover가 있어야 env(safe-area-inset-*)가 실제 값을 갖는다. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- black-translucent는 상태바 글자를 흰색으로 고정한다. 이 앱은 흰 배경 테마가 2개(화이트·로즈)라
+     흰 글자 × 흰 배경이 되어 시계·배터리가 사라진 것처럼 보였다. default로 두면 iOS가 알아서 고른다. -->
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="가계부">
 <!-- manifest의 theme_color/background_color와 같은 값이어야 한다. 어긋나면 앱 실행 시 색이 한 번 튄다. -->
 <meta name="theme-color" content="#0f1628">
@@ -225,7 +231,12 @@ body {
   border-radius: var(--radius-sm); padding: 10px 16px; margin-bottom: 12px;
 }
 .month-label { font-size: 16px; font-weight: 700; color: var(--text); font-family: var(--font-display); }
-.month-btn { background: none; border: none; color: var(--accent); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+/* 하루에도 여러 번 누르는 버튼인데 22x31px이라 헛손질이 잦았다. iOS 최소 권장 44px로. */
+.month-btn {
+  background: none; border: none; color: var(--accent); cursor: pointer;
+  min-width: 44px; min-height: 44px; font-size: 20px;
+  display: flex; align-items: center; justify-content: center;
+}
 
 /* ===== TRANSACTION LIST ===== */
 .tx-list { display: flex; flex-direction: column; gap: 8px; }
@@ -261,7 +272,12 @@ body {
 
 /* ===== FLOATING ADD BUTTON ===== */
 .fab {
-  position: fixed; bottom: calc(70px + env(safe-area-inset-bottom)); right: 20px;
+  /* right:20px 이면 '모니터 오른쪽 끝'에 붙는다 — #app은 430px로 가운데 정렬되는데 fab만
+     position:fixed라 뷰포트 기준이기 때문(#app의 position:relative는 fixed의 기준이 못 된다).
+     1920px 화면에서 앱과 700px 넘게 떨어져 앱의 일부로 안 보였다. 바텀네비처럼 앱 컬럼에 맞춘다.
+     max()라 430px 미만(폰)에서는 기존 20px가 그대로 쓰인다. */
+  position: fixed; bottom: calc(70px + env(safe-area-inset-bottom));
+  right: max(20px, calc(50% - 195px));
   width: 52px; height: 52px; border-radius: 50%;
   background: var(--accent); color: var(--bg);
   font-size: 24px; font-weight: 300;
@@ -281,6 +297,7 @@ body {
 }
 .modal-backdrop.open { display: flex; }
 .modal {
+  overscroll-behavior: contain;   /* 모달 끝까지 스크롤했을 때 뒤 목록이 따라 움직이지 않도록 */
   background: var(--bg2);
   border-radius: 24px 24px 0 0;
   width: 100%; max-width: 430px;
@@ -299,7 +316,9 @@ body {
   width: 100%;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 12px 14px;
-  color: var(--text); font-size: 15px; font-family: var(--font-main);
+  /* 16px 미만이면 iOS가 입력칸 탭 시 화면을 멋대로 확대한다. viewport에서 user-scalable=no를
+     걷어냈으므로(확대 허용) 이 값은 반드시 16px여야 한다. */
+  color: var(--text); font-size: 16px; font-family: var(--font-main);
   outline: none; transition: border-color var(--transition);
   -webkit-appearance: none;
 }
@@ -483,6 +502,11 @@ body {
 .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; width: 100%; }
 
 /* SMS Parser */
+/* contenteditable에는 placeholder 속성이 안 먹는다. 비어있을 때만 안내문을 그린다.
+   (예전엔 리터럴 텍스트라 한 번 쓰고 나면 안내가 영영 사라졌다) */
+.sms-paste-area:empty::before {
+  content: attr(placeholder); color: var(--text3); pointer-events: none;
+}
 .sms-paste-area {
   width: 100%; padding: 12px 14px;
   background: var(--surface); border: 2px dashed var(--border);
@@ -902,8 +926,7 @@ body {
         contenteditable="true"
         placeholder="카카오페이·토스·카드사 문자를 여기에 붙여넣으세요"
         onpaste="handleSmsPaste(event)"
-        oninput="handleSmsInput(this)"
-      >[카카오페이·토스·카드 문자를 여기에 붙여넣으세요]</div>
+      ></div>
       <div id="sms-result" style="display:none;margin-top:6px"></div>
     </div>
 
@@ -912,7 +935,7 @@ body {
     <div class="form-group">
       <label class="form-label">📷 영수증 사진 (AI 자동 인식)</label>
       <div class="photo-upload" id="photo-upload-area">
-        <input type="file" accept="image/*" capture="environment" id="photo-input" onchange="handlePhotoSelect(event)">
+        <input type="file" accept="image/*"  id="photo-input" onchange="handlePhotoSelect(event)">
         <div id="photo-placeholder">
           <div style="font-size:32px">📷</div>
           <div style="font-size:13px;color:var(--text2);margin-top:6px;font-weight:500">사진 찍기 또는 갤러리 선택</div>
@@ -1107,6 +1130,13 @@ body {
 <div class="toast" id="toast"></div>
 
 <script>
+// PC에서 금액칸에 포커스가 있는 채로 휠을 굴리면 type=number가 숫자를 조용히 증감시킨다.
+// 모달이 내부 스크롤(overflow-y:auto)이라 스크롤하려다 금액이 바뀌는데, 화면엔 '✅ 저장 완료'만 떠서
+// 나중에 합계가 안 맞아도 어디서 틀어졌는지 알 수 없다. 포커스를 떼서 증감 자체를 막는다.
+document.addEventListener('wheel', e => {
+  if (document.activeElement === e.target && e.target.type === 'number') e.target.blur();
+}, { passive: true });
+
 // ===== DATA & STATE =====
 // 예전엔 여기 Supabase 클라이언트가 있었고 anon key가 화면 소스에 그대로 노출됐다.
 // 이제 브라우저가 가진 건 Worker가 서명해준 세션 토큰뿐이고, DB 접근 권한은 서버에만 있다.
@@ -1290,8 +1320,19 @@ function showApp() {
 }
 
 function useDemoMode() {
+  // 예전엔 들어올 때마다 조건 없이 샘플로 덮어써서, 데모로 며칠 기록해둔 게 통째로 사라졌다.
+  // logout()의 확인창은 '데모 데이터는 남아있어요'라고 약속하는데 그 약속을 앱이 스스로 깼다.
+  if (localStorage.getItem('transactions_demo') &&
+      !confirm('기존 데모 데이터를 샘플로 초기화할까요?\n(지금까지 입력한 내역은 사라져요)')) {
+    localStorage.setItem('demoMode', 'true');
+    demoMode = true;
+    loadSettings();
+    showApp();
+    return;
+  }
   localStorage.setItem('demoMode', 'true');
   demoMode = true;
+  localStorage.removeItem('recurring_applied_demo');   // 샘플로 되돌리면 자동등록 기록도 함께 초기화
 
   const nowY = new Date().getFullYear();
   const nowM = new Date().getMonth();
@@ -1719,7 +1760,7 @@ function renderRecurringList() {
           <div class="settings-item-sub">매월 ${r.day}일 · ${fmtMoney(r.amount)}</div>
         </div>
       </div>
-      <div onclick="deleteRecurring(${i})" style="color:var(--expense);font-size:18px;cursor:pointer;padding:4px">×</div>
+      <div onclick="deleteRecurring(${i})" style="color:var(--expense);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px">×</div>
     </div>
   `).join('');
 }
@@ -1766,8 +1807,22 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 // Modal backdrop click to close (runs after DOM ready)
 function initModalBackdrops() {
   document.querySelectorAll('.modal-backdrop').forEach(b => {
-    b.addEventListener('click', e => { if (e.target === b) b.classList.remove('open'); });
+    b.addEventListener('click', e => {
+      if (e.target !== b) return;
+      // 거래 추가 모달은 배경을 한 번 잘못 스치면 사진·AI 인식 결과까지 통째로 날아간다.
+      // 이미 버린 영수증을 찍어놨을 수도 있어 되돌릴 수 없다. 내용이 있으면 되묻는다.
+      if (b.id === 'add-modal' && addModalHasInput() &&
+          !confirm('작성 중인 내용이 사라집니다. 닫을까요?')) return;
+      b.classList.remove('open');
+    });
   });
+}
+
+// 거래 추가 모달에 사용자가 넣은 게 있는지
+function addModalHasInput() {
+  const v = id => (document.getElementById(id)?.value || '').trim();
+  return !!(v('tx-amount') || v('tx-name') || v('tx-memo') || selectedPhotoBase64 ||
+            (document.getElementById('sms-paste-area')?.innerText || '').trim());
 }
 
 let currentTxType = 'expense';
@@ -1776,6 +1831,9 @@ let selectedCategory = '';
 function openAddModal(tx = null) {
   currentEditTx = tx;
   selectedPhotoBase64 = null;
+  // 이걸 비우지 않으면 방금 고른 사진을 다시 고를 때 change 이벤트가 안 나서
+  // 아무 반응이 없다(사용자는 앱이 고장난 줄 알고 몇 번씩 다시 고르다 포기한다).
+  document.getElementById('photo-input').value = '';
   document.getElementById('photo-preview').style.display = 'none';
   document.getElementById('photo-placeholder').style.display = 'block';
   document.getElementById('ai-loading').style.display = 'none';
@@ -1802,7 +1860,9 @@ function openAddModal(tx = null) {
   }
   renderCategoryGrid(currentTxType);
   openModal('add-modal');
-  setTimeout(() => document.getElementById('tx-amount').focus(), 300);
+  // setTimeout 안에서 focus()하면 사용자 제스처 컨텍스트를 벗어나 iOS가 키보드를 안 띄운다.
+  // (테두리만 파래지고 키보드가 안 올라와서 금액칸을 한 번 더 눌러야 했다)
+  document.getElementById('tx-amount').focus();
 }
 
 function setType(type) {
@@ -2262,6 +2322,9 @@ function switchPage(name) {
 }
 
 function changeMonth(delta) {
+  // 필터를 유지한 채 월을 넘기면, 그 달에 없는 카테고리라 목록이 텅 비고 활성 탭도 없어
+  // 사용자는 데이터가 사라진 줄 안다(빠져나올 단서가 화면에 없다).
+  selectedCategoryFilter = '전체';
   currentMonth += delta;
   if (currentMonth > 11) { currentMonth = 0; currentYear++; }
   if (currentMonth < 0) { currentMonth = 11; currentYear--; }
@@ -2304,10 +2367,8 @@ function handleSmsPaste(e) {
   }, 50);
 }
 
-function handleSmsInput(el) {
-  const text = el.innerText || el.textContent || '';
-  if (text.length > 10) parseSmsText(text);
-}
+// handleSmsInput(oninput 재파싱)은 제거했다. 글자 하나 고칠 때마다 다시 파싱해서,
+// 사용자가 손으로 바로잡은 금액·카테고리를 조용히 원래대로 덮어썼다. 파싱은 붙여넣기(onpaste)에서만 한다.
 
 function parseSmsText(text) {
   const result = extractPaymentInfo(text);
