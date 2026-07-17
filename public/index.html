@@ -2877,7 +2877,7 @@ function scheduleAlarm(time, msg) {
     if (cur === time) {
       new Notification('💰 우리집 가계부', {
         body: msg,
-        icon: '/gagyebu/icon.png'
+        icon: '/icons/icon-192.png'   // 옛 GitHub Pages 경로(/gagyebu/icon.png)라 없는 파일이었다
       });
     }
   }, 30000); // Check every 30 seconds
