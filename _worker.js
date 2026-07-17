@@ -221,6 +221,113 @@ export default {
         return json({ tx: row });
       }
 
+      // ── 영수증 AI 인식 ──
+      //  예전엔 브라우저가 Gemini를 직접 부르고 API 키를 localStorage에 뒀다. XSS 한 번이면
+      //  키가 털려 사장님 구글 계정에 요금이 붙는 구조였고, 키가 없으면 prompt로 물어봤다.
+      //  이제 키는 Worker secret에만 있고 브라우저는 사진만 보낸다.
+      if (path === '/api/ai/receipt' && request.method === 'POST') {
+        if (!env.GEMINI_API_KEY) {
+          return json({ error: '영수증 AI 인식이 아직 설정되지 않았어요. 사진은 그대로 저장되니 금액만 직접 넣어주세요' }, 503);
+        }
+        const b = await request.json().catch(() => ({}));
+        const m = String(b?.image || '').match(/^data:(image\/[a-z]+);base64,([A-Za-z0-9+/=]+)$/);
+        if (!m) return json({ error: '이미지 형식을 알 수 없어요' }, 400);
+        const [, mime, data] = m;
+        if (data.length > 8_000_000) return json({ error: '사진이 너무 커요' }, 413);
+
+        // 카테고리 목록은 앱이 보내온 걸 쓴다. 여기에 하드코딩하면 앱의 CATEGORIES와 어긋나서,
+        // 모델이 없는 카테고리('주거' 등)를 돌려주고 앱은 그걸 버려 사용자 눈엔 인식 실패로 보인다.
+        const cats = Array.isArray(b?.categories) && b.categories.length
+          ? b.categories.filter(c => typeof c === 'string' && c.length <= 40).slice(0, 30)
+          : ['기타'];
+
+        // 응답이 안 오면 화면이 '분석 중…'에서 영원히 멈춘다. 반드시 끊는다.
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 25000);
+        let g;
+        try {
+          const res = await fetch(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' +
+              encodeURIComponent(env.GEMINI_API_KEY),
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: ctrl.signal,
+              body: JSON.stringify({
+                contents: [{ parts: [
+                  { inline_data: { mime_type: mime, data } },
+                  { text: '이 영수증 사진을 분석해서 JSON만 출력해. 다른 말 금지.\n' +
+                          '형식: {"name":"가게명","amount":숫자,"category":"아래 목록 중 정확히 하나"}\n' +
+                          '카테고리 목록: ' + cats.join(' | ') + '\n' +
+                          'amount는 총 결제금액의 숫자만(쉼표·원 표시 없이). 못 읽으면 amount를 0으로.' },
+                ] }],
+                generationConfig: { temperature: 0.1, maxOutputTokens: 200 },
+              }),
+            }
+          );
+          g = await res.json();
+        } catch (e) {
+          return json({ error: e?.name === 'AbortError' ? 'AI 응답이 너무 늦어요. 직접 입력해 주세요' : 'AI 호출 실패: ' + e.message }, 504);
+        } finally {
+          clearTimeout(timer);
+        }
+
+        if (g?.error) {
+          console.warn('Gemini 오류:', JSON.stringify(g.error).slice(0, 300));
+          return json({ error: 'AI 인식에 실패했어요. 직접 입력해 주세요' }, 502);
+        }
+        const text = g?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const jm = text.match(/\{[\s\S]*\}/); // 모델이 ```json 같은 걸 붙여도 건져낸다
+        if (!jm) return json({ error: '영수증을 알아보지 못했어요. 직접 입력해 주세요' }, 422);
+        let parsed;
+        try { parsed = JSON.parse(jm[0]); } catch { return json({ error: '영수증을 알아보지 못했어요. 직접 입력해 주세요' }, 422); }
+
+        const amount = Math.floor(Number(parsed.amount) || 0);
+        return json({
+          name: String(parsed.name ?? '').slice(0, 100),
+          amount: amount > 0 && amount < 100000000000 ? amount : 0,
+          category: String(parsed.category ?? '').slice(0, 40),
+        });
+      }
+
+      // ── 소비 패턴 분석 (통계 화면) ──
+      //  앱이 이미 집계한 요약문만 보내온다. 원본 거래를 통째로 보내지 않으므로 외부로 나가는 정보가 적다.
+      if (path === '/api/ai/analyze' && request.method === 'POST') {
+        if (!env.GEMINI_API_KEY) return json({ error: 'AI 분석이 아직 설정되지 않았어요' }, 503);
+        const b = await request.json().catch(() => ({}));
+        const summary = String(b?.summary || '');
+        if (!summary || summary.length > 4000) return json({ error: '분석할 내용이 올바르지 않아요' }, 400);
+
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 25000);
+        let g;
+        try {
+          const res = await fetch(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' +
+              encodeURIComponent(env.GEMINI_API_KEY),
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: ctrl.signal,
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: summary }] }],
+                generationConfig: { temperature: 0.7, maxOutputTokens: 600 },
+              }),
+            }
+          );
+          g = await res.json();
+        } catch (e) {
+          return json({ error: e?.name === 'AbortError' ? 'AI 응답이 너무 늦어요' : 'AI 호출 실패: ' + e.message }, 504);
+        } finally {
+          clearTimeout(timer);
+        }
+        if (g?.error) {
+          console.warn('Gemini 오류:', JSON.stringify(g.error).slice(0, 300));
+          return json({ error: 'AI 분석에 실패했어요' }, 502);
+        }
+        return json({ text: g?.candidates?.[0]?.content?.parts?.[0]?.text || '' });
+      }
+
       // ── 영수증 사진 (필요할 때만 한 장씩) ──
       if (path.startsWith('/api/tx/') && path.endsWith('/photo') && request.method === 'GET') {
         const id = decodeURIComponent(path.slice('/api/tx/'.length, -'/photo'.length));
@@ -261,6 +368,80 @@ export default {
         const r = await env.DB.prepare(`DELETE FROM transactions WHERE id = ?1`).bind(txId).run();
         if (!r.meta.changes) return json({ error: '삭제할 거래를 찾지 못했어요' }, 404);
         return json({ ok: true });
+      }
+
+      // ── 정기 지출 규칙 ──
+      if (path === '/api/recurring' && request.method === 'GET') {
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules ORDER BY day`).all();
+        return json({ rules: r.results ?? [] });
+      }
+
+      if (path === '/api/recurring' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const amount = Number(b?.amount), day = Number(b?.day);
+        if (!b?.name || String(b.name).length > 100) return json({ error: '이름을 확인해 주세요' }, 400);
+        if (!b?.category || String(b.category).length > 40) return json({ error: '카테고리를 확인해 주세요' }, 400);
+        if (!Number.isInteger(amount) || amount <= 0) return json({ error: '금액은 1원 이상의 정수여야 해요' }, 400);
+        if (!Number.isInteger(day) || day < 1 || day > 31) return json({ error: '날짜는 1~31 사이여야 해요' }, 400);
+        const id = crypto.randomUUID();
+        await env.DB.prepare(
+          `INSERT INTO recurring_rules (id, name, amount, category, day) VALUES (?1,?2,?3,?4,?5)`
+        ).bind(id, String(b.name), amount, String(b.category), day).run();
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules ORDER BY day`).all();
+        return json({ rules: r.results ?? [] });
+      }
+
+      if (path.startsWith('/api/recurring/') && request.method === 'DELETE') {
+        const id = decodeURIComponent(path.slice('/api/recurring/'.length));
+        await env.DB.prepare(`DELETE FROM recurring_applied WHERE rule_id = ?1`).bind(id).run();
+        const d = await env.DB.prepare(`DELETE FROM recurring_rules WHERE id = ?1`).bind(id).run();
+        if (!d.meta.changes) return json({ error: '정기 지출을 찾지 못했어요' }, 404);
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules ORDER BY day`).all();
+        return json({ rules: r.results ?? [] });
+      }
+
+      // ── 정기 지출 자동 등록 ──
+      //  판단을 서버가 한다. 앱이 "오늘 며칠인지"만 알려주면(서버 시각은 UTC라 한국 날짜와 다를 수 있다)
+      //  나머지는 여기서 원자적으로 처리한다.
+      //  recurring_applied에 (규칙,달)을 INSERT OR IGNORE 하는 게 곧 잠금이다:
+      //   - 이미 등록한 달이면 changes=0 → 건너뛴다. 사용자가 그 거래를 지웠어도 다시 만들지 않는다.
+      //     (예전엔 지우면 즉시 되살아나서 삭제가 아예 불가능했다)
+      //   - 부부가 같은 순간에 앱을 열어도 한쪽만 changes=1이라 중복이 생기지 않는다.
+      if (path === '/api/recurring/apply' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const today = b?.today;
+        if (!isDate(today)) return json({ error: '날짜가 올바르지 않아요' }, 400);
+        const ym = today.slice(0, 7);
+        const todayDay = Number(today.slice(8, 10));
+        const lastDay = new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).getUTCDate();
+
+        const rules = (await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules`).all()).results ?? [];
+        const created = [];
+        for (const rule of rules) {
+          const day = Math.min(rule.day, lastDay); // 31일 규칙이 30일 달에서 없는 날짜가 되지 않도록
+          if (day > todayDay) continue;            // 아직 그날이 안 됨
+          const claim = await env.DB.prepare(
+            `INSERT OR IGNORE INTO recurring_applied (rule_id, ym) VALUES (?1,?2)`
+          ).bind(rule.id, ym).run();
+          if (!claim.meta.changes) continue;       // 이미 이 달에 등록했음
+
+          const txId = crypto.randomUUID();
+          try {
+            await env.DB.prepare(
+              `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name)
+               VALUES (?1,?2,'expense',?3,?4,?5,'자동 등록',NULL,1,'')`
+            ).bind(txId, `${ym}-${String(day).padStart(2, '0')}`, rule.category, rule.name, rule.amount).run();
+          } catch (e) {
+            // 거래를 못 넣었으면 등록 표시도 되돌린다. 안 그러면 영영 등록되지 않는다.
+            await env.DB.prepare(`DELETE FROM recurring_applied WHERE rule_id=?1 AND ym=?2`).bind(rule.id, ym).run();
+            console.warn('정기 지출 자동 등록 실패:', rule.name, String(e?.message || e));
+            continue;
+          }
+          await env.DB.prepare(`UPDATE recurring_applied SET tx_id=?1 WHERE rule_id=?2 AND ym=?3`).bind(txId, rule.id, ym).run();
+          const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(txId).first();
+          if (row) created.push(row);
+        }
+        return json({ created });
       }
 
       // ── 예산 저장 ──

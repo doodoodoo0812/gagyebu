@@ -43,3 +43,29 @@ CREATE TABLE budgets (
   amount     INTEGER NOT NULL CHECK (amount > 0 AND amount < 100000000000),
   UNIQUE(month, category)
 );
+
+-- 정기 지출 규칙(관리비·구독료 등).
+-- 예전엔 이 규칙이 각자 폰의 localStorage에만 있어서 부부 사이에 동기화되지 않았다.
+-- 한쪽이 규칙을 지워도 다른 쪽 폰이 계속 등록해대서 "분명 지웠는데 또 생겨요"가 됐고,
+-- 원인이 상대 폰에 있다는 걸 앱 화면만 봐서는 알 수 없었다.
+CREATE TABLE recurring_rules (
+  id         TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  name       TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
+  amount     INTEGER NOT NULL CHECK (amount > 0 AND amount < 100000000000),
+  category   TEXT NOT NULL CHECK (length(category) BETWEEN 1 AND 40),
+  day        INTEGER NOT NULL CHECK (day BETWEEN 1 AND 31)
+);
+
+-- "이 규칙을 이 달에 이미 등록했다"는 사실 자체를 남긴다. 거래가 아니라 '등록했음'을 기억하는 게 핵심.
+-- 예전에는 이걸 기억하는 곳이 없어서, 자동 등록된 관리비를 지우면 바로 다음 loadData가
+-- "어? 없네" 하고 즉시 다시 만들었다. 사용자는 삭제 자체를 할 수 없었는데 화면엔 '삭제 완료'가 떴다.
+-- 거래를 지워도 이 기록은 남으므로 되살아나지 않는다.
+-- PRIMARY KEY가 곧 잠금이라, 부부가 같은 순간에 앱을 열어도 INSERT OR IGNORE로 한 번만 등록된다.
+CREATE TABLE recurring_applied (
+  rule_id    TEXT NOT NULL,
+  ym         TEXT NOT NULL CHECK (ym GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+  tx_id      TEXT,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (rule_id, ym)
+);
