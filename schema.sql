@@ -69,3 +69,14 @@ CREATE TABLE recurring_applied (
   applied_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (rule_id, ym)
 );
+
+-- 앱 설정(현재는 Gemini API 키와 자동 감지된 모델명).
+-- 키를 여기 두는 이유: 앱 설정 화면에서 넣고 싶다는 요구가 있었는데, 예전처럼 localStorage에 두면
+-- XSS 한 번에 털려 계정에 요금이 붙는다. 서버에 두면 앱에서 넣되 브라우저에는 남지 않는다.
+-- (Worker secret 만큼 강하진 않지만 — secret은 별도 암호화 — Worker 인증을 통과해야만 닿고
+--  키 값 자체는 브라우저로 절대 되돌려주지 않는다. localStorage와는 비교가 안 된다.)
+CREATE TABLE app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

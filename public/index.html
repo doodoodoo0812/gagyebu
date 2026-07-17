@@ -834,6 +834,16 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
+      <div class="settings-item" onclick="openAiModal()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🤖</div>
+          <div>
+            <div class="settings-item-text">영수증 AI 인식</div>
+            <div class="settings-item-sub" id="ai-status">확인 중…</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -1044,6 +1054,28 @@ body {
 </div>
 
 <!-- RECURRING MODAL -->
+<div class="modal-backdrop" id="ai-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">영수증 AI 인식</div>
+    <p style="font-size:13px;color:var(--text2);line-height:1.6;margin:0 0 14px">
+      Google AI Studio에서 <b>무료</b> API 키를 받아 넣으면, 영수증을 찍었을 때 금액·가게명을 자동으로 읽어줘요.<br>
+      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
+         style="color:var(--accent);text-decoration:none">aistudio.google.com/apikey →</a>
+    </p>
+    <div class="form-group">
+      <label class="form-label">Gemini API 키</label>
+      <input class="form-input" id="ai-key-input" type="password" placeholder="AIza..."
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div id="ai-modal-status" style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.6"></div>
+    <button class="btn-primary" id="ai-save-btn" onclick="saveAiKey()">저장하고 자동 설정</button>
+    <button class="btn-secondary" onclick="redetectAiModel()" style="margin-top:8px">🔄 모델 다시 찾기</button>
+    <button class="btn-secondary" onclick="removeAiKey()" style="margin-top:8px">🗑️ 키 삭제</button>
+    <button class="btn-secondary" onclick="closeModal('ai-modal')" style="margin-top:8px">닫기</button>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="recurring-modal">
   <div class="modal">
     <div class="modal-handle"></div>
@@ -1454,6 +1486,7 @@ async function loadData() {
   await loadRecurring();   // 규칙은 서버에 있으므로 매번 받아온다(배우자가 추가·삭제했을 수 있다)
   await applyRecurring();
   renderAll();
+  refreshAiStatus();       // 설정 화면의 AI 상태 표시 (실패해도 앱엔 지장 없으므로 await 안 함)
 }
 
 async function syncData() {
@@ -2355,8 +2388,91 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2500);
 }
 
-// Gemini 키 입력 UI는 없앴다. 키는 이제 Worker secret(GEMINI_API_KEY)에만 있고
-// 브라우저는 사진/요약문만 보낸다. 사용자에게 API 키를 물어볼 이유가 없어졌다.
+// ===== AI 설정 =====
+// 키는 앱에서 넣되 브라우저에 저장하지 않는다. 서버로 보내 D1에 두고, 앱은 '설정됨/모델명'만 받는다.
+// (예전처럼 localStorage에 두면 XSS 한 번에 털려 구글 계정에 요금이 붙는다)
+// 모델명은 서버가 구글에 물어보고 자동으로 고른다 — 박아두면 폐기될 때 통째로 죽는다(gemini-1.5-flash가 그랬다).
+
+function aiStatusText(s) {
+  if (!s?.configured) return '설정 안 됨 — 눌러서 키 넣기';
+  const where = s.source === 'app' ? '앱에서 설정됨' : '서버 secret';
+  return `✅ ${where}${s.model ? ' · ' + s.model : ''}`;
+}
+
+async function refreshAiStatus() {
+  const el = document.getElementById('ai-status');
+  if (!el) return null;
+  if (demoMode || !authToken) { el.textContent = '로그인 후 설정할 수 있어요'; return null; }
+  try {
+    const s = await api('/settings/gemini');
+    el.textContent = aiStatusText(s);
+    return s;
+  } catch(e) {
+    el.textContent = '상태를 확인하지 못했어요';
+    return null;
+  }
+}
+
+async function openAiModal() {
+  if (demoMode) { showToast('데모 모드에선 설정할 수 없어요'); return; }
+  if (!authToken) { showToast('로그인이 필요해요'); return; }
+  document.getElementById('ai-key-input').value = '';
+  const box = document.getElementById('ai-modal-status');
+  box.textContent = '확인 중…';
+  openModal('ai-modal');
+  const s = await refreshAiStatus();
+  box.innerHTML = s?.configured
+    ? `현재: ${esc(aiStatusText(s))}<br>바꾸려면 새 키를 넣고 저장하세요.`
+    : '아직 키가 없어요. 키를 넣으면 쓸 수 있는 모델을 자동으로 찾아 설정합니다.';
+}
+
+async function saveAiKey() {
+  const key = document.getElementById('ai-key-input').value.trim();
+  if (!key) { showToast('API 키를 입력해 주세요'); return; }
+  const btn = document.getElementById('ai-save-btn');
+  const box = document.getElementById('ai-modal-status');
+  btn.disabled = true; btn.textContent = '확인 중…';
+  box.textContent = '키를 확인하고 쓸 수 있는 모델을 찾는 중…';
+  try {
+    // 서버가 저장 전에 구글에 물어봐서 키가 진짜 되는지 확인한다.
+    // 안 그러면 오타난 키가 저장되고, 나중에 영수증 찍을 때가 되어서야 실패해 원인을 알기 어렵다.
+    const r = await api('/settings/gemini', { method: 'POST', body: { key } });
+    document.getElementById('ai-key-input').value = '';
+    box.innerHTML = `✅ 설정 완료 — 모델 <b>${esc(r.model)}</b>을(를) 자동으로 골랐어요.` +
+      (r.candidates?.length > 1 ? `<br><span style="color:var(--text3)">후보: ${esc(r.candidates.slice(0,4).join(', '))}</span>` : '');
+    showToast('✅ AI 인식 설정 완료');
+    await refreshAiStatus();
+  } catch(e) {
+    box.innerHTML = `<span style="color:var(--expense)">❌ ${esc(e.message)}</span>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '저장하고 자동 설정';
+  }
+}
+
+async function redetectAiModel() {
+  const box = document.getElementById('ai-modal-status');
+  box.textContent = '모델을 다시 찾는 중…';
+  try {
+    const r = await api('/settings/gemini/redetect', { method: 'POST' });
+    box.innerHTML = `✅ 모델 <b>${esc(r.model)}</b>로 설정했어요.`;
+    showToast('✅ 모델 재설정 완료');
+    await refreshAiStatus();
+  } catch(e) {
+    box.innerHTML = `<span style="color:var(--expense)">❌ ${esc(e.message)}</span>`;
+  }
+}
+
+async function removeAiKey() {
+  if (!confirm('저장된 API 키를 지울까요?\nAI 인식만 꺼지고 다른 기능은 그대로예요.')) return;
+  try {
+    await api('/settings/gemini', { method: 'DELETE' });
+    document.getElementById('ai-modal-status').textContent = '키를 지웠어요.';
+    showToast('🗑️ 키 삭제 완료');
+    await refreshAiStatus();
+  } catch(e) {
+    showToast('❌ ' + e.message);
+  }
+}
 
 // ===== SMS PARSER =====
 function handleSmsPaste(e) {

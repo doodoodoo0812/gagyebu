@@ -125,6 +125,121 @@ function cleanTx(b) {
 const TX_COLS = `id, created_at, date, type, category, name, amount, memo, is_recurring, user_name,
                  (photo_url IS NOT NULL) AS has_photo`;
 
+// ───────── 설정 저장소 (app_settings) ─────────
+async function getSetting(env, key) {
+  const r = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = ?1`).bind(key).first();
+  return r?.value ?? null;
+}
+async function setSetting(env, key, value) {
+  await env.DB.prepare(
+    `INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+  ).bind(key, value).run();
+}
+
+// 앱 설정에서 넣은 키가 우선. 없으면 wrangler secret(GEMINI_API_KEY)을 쓴다.
+async function geminiKey(env) {
+  return (await getSetting(env, 'gemini_key')) || env.GEMINI_API_KEY || null;
+}
+
+// ───────── Gemini 모델 자동 감지 ─────────
+// 모델명을 코드에 박아두면 구글이 그 모델을 폐기하는 순간 기능이 통째로 죽는다.
+// 실제로 gemini-1.5-flash가 폐기돼서 영수증 인식이 아무 설명 없이 안 됐다.
+// 그래서 쓸 수 있는 모델을 물어보고 고른다.
+function pickGeminiModel(models) {
+  const id = m => String(m.name || '').replace(/^models\//, '');
+  const usable = (models || []).filter(m =>
+    (m.supportedGenerationMethods || []).includes('generateContent') && /^gemini-/.test(id(m))
+  );
+  const score = (m) => {
+    const n = id(m);
+    let s = 0;
+    // 영수증 사진 한 장 읽고 짧은 JSON을 뱉는 일이라 flash가 맞다(빠르고 싸다).
+    if (/flash/.test(n)) s += 100;
+    if (/\blite\b|-lite/.test(n)) s -= 20;                  // lite는 인식 품질이 떨어질 수 있어 후순위
+    if (/preview|exp|experimental|thinking/.test(n)) s -= 60; // 미리보기는 예고 없이 사라진다
+    if (/-\d{3,}$/.test(n)) s -= 5;                          // -001 같은 스냅샷보다 별칭(자동 최신)을 선호
+    const v = parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
+    s += v * 10;                                             // 버전이 높을수록
+    return s;
+  };
+  usable.sort((a, b) => score(b) - score(a));
+  return usable.length ? { model: id(usable[0]), candidates: usable.slice(0, 8).map(id) } : null;
+}
+
+async function listGeminiModels(key) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=' + encodeURIComponent(key),
+      { signal: ctrl.signal }
+    );
+    const data = await res.json();
+    if (data?.error) return { err: data.error.message || '키를 확인해 주세요' };
+    return { models: data?.models || [] };
+  } catch (e) {
+    return { err: e?.name === 'AbortError' ? '구글 응답이 너무 늦어요' : '연결 실패: ' + e.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 저장된 모델을 쓰되, 없거나 폐기됐으면 다시 찾아서 저장한다.
+async function currentGeminiModel(env, key, force = false) {
+  if (!force) {
+    const saved = await getSetting(env, 'gemini_model');
+    if (saved) return saved;
+  }
+  const { models, err } = await listGeminiModels(key);
+  if (err) return null;
+  const picked = pickGeminiModel(models);
+  if (!picked) return null;
+  await setSetting(env, 'gemini_model', picked.model);
+  return picked.model;
+}
+
+// Gemini 호출 + 모델이 사라졌으면(404/NOT_FOUND) 한 번 자동 재탐지 후 재시도.
+async function callGemini(env, key, body) {
+  let model = await currentGeminiModel(env, key);
+  if (!model) return { err: 'AI 설정을 확인해 주세요 (사용 가능한 모델을 찾지 못했어요)' };
+
+  const once = async (m) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=` +
+          encodeURIComponent(key),
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal, body: JSON.stringify(body) }
+      );
+      return { status: res.status, data: await res.json() };
+    } catch (e) {
+      return { err: e?.name === 'AbortError' ? 'AI 응답이 너무 늦어요. 직접 입력해 주세요' : 'AI 호출 실패: ' + e.message };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let r = await once(model);
+  if (r.err) return r;
+
+  // 모델이 폐기·삭제된 경우. 이게 바로 gemini-1.5-flash 때 앱이 죽은 상황이다. 스스로 회복한다.
+  if (r.status === 404 || /not found|is not supported|deprecated/i.test(r.data?.error?.message || '')) {
+    console.warn('모델', model, '을(를) 못 씀 → 재탐지');
+    const fresh = await currentGeminiModel(env, key, true);
+    if (fresh && fresh !== model) {
+      r = await once(fresh);
+      if (r.err) return r;
+    }
+  }
+  if (r.data?.error) {
+    console.warn('Gemini 오류:', JSON.stringify(r.data.error).slice(0, 300));
+    return { err: 'AI 인식에 실패했어요. 직접 입력해 주세요' };
+  }
+  return { text: r.data?.candidates?.[0]?.content?.parts?.[0]?.text || '' };
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -221,13 +336,59 @@ export default {
         return json({ tx: row });
       }
 
+      // ── AI 설정 (앱 설정 화면에서 키 입력) ──
+      //  키 값 자체는 절대 브라우저로 돌려주지 않는다. 설정됐는지와 어떤 모델을 쓰는지만 알려준다.
+      if (path === '/api/settings/gemini' && request.method === 'GET') {
+        const fromApp = await getSetting(env, 'gemini_key');
+        return json({
+          configured: !!(fromApp || env.GEMINI_API_KEY),
+          source: fromApp ? 'app' : (env.GEMINI_API_KEY ? 'secret' : null),
+          model: await getSetting(env, 'gemini_model'),
+        });
+      }
+
+      if (path === '/api/settings/gemini' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const key = String(b?.key || '').trim();
+        if (!key) return json({ error: 'API 키를 입력해 주세요' }, 400);
+
+        // 저장하기 전에 키가 진짜 되는지 확인한다. 안 그러면 오타난 키가 저장되고
+        // 나중에 사진 찍을 때가 되어서야 실패해 원인을 알기 어렵다.
+        const { models, err } = await listGeminiModels(key);
+        if (err) return json({ error: err }, 400);
+        const picked = pickGeminiModel(models);
+        if (!picked) return json({ error: '이 키로 쓸 수 있는 모델이 없어요' }, 400);
+
+        await setSetting(env, 'gemini_key', key);
+        await setSetting(env, 'gemini_model', picked.model);
+        return json({ ok: true, model: picked.model, candidates: picked.candidates });
+      }
+
+      // 모델만 다시 찾기 (키는 그대로)
+      if (path === '/api/settings/gemini/redetect' && request.method === 'POST') {
+        const key = await geminiKey(env);
+        if (!key) return json({ error: '먼저 API 키를 넣어주세요' }, 400);
+        const { models, err } = await listGeminiModels(key);
+        if (err) return json({ error: err }, 400);
+        const picked = pickGeminiModel(models);
+        if (!picked) return json({ error: '쓸 수 있는 모델이 없어요' }, 400);
+        await setSetting(env, 'gemini_model', picked.model);
+        return json({ ok: true, model: picked.model, candidates: picked.candidates });
+      }
+
+      if (path === '/api/settings/gemini' && request.method === 'DELETE') {
+        await env.DB.prepare(`DELETE FROM app_settings WHERE key IN ('gemini_key','gemini_model')`).run();
+        return json({ ok: true, configured: !!env.GEMINI_API_KEY });
+      }
+
       // ── 영수증 AI 인식 ──
       //  예전엔 브라우저가 Gemini를 직접 부르고 API 키를 localStorage에 뒀다. XSS 한 번이면
       //  키가 털려 사장님 구글 계정에 요금이 붙는 구조였고, 키가 없으면 prompt로 물어봤다.
       //  이제 키는 Worker secret에만 있고 브라우저는 사진만 보낸다.
       if (path === '/api/ai/receipt' && request.method === 'POST') {
-        if (!env.GEMINI_API_KEY) {
-          return json({ error: '영수증 AI 인식이 아직 설정되지 않았어요. 사진은 그대로 저장되니 금액만 직접 넣어주세요' }, 503);
+        const key = await geminiKey(env);
+        if (!key) {
+          return json({ error: '영수증 AI 인식이 아직 설정되지 않았어요. 설정 화면에서 API 키를 넣어주세요 (사진은 그대로 저장돼요)' }, 503);
         }
         const b = await request.json().catch(() => ({}));
         const m = String(b?.image || '').match(/^data:(image\/[a-z]+);base64,([A-Za-z0-9+/=]+)$/);
@@ -241,42 +402,19 @@ export default {
           ? b.categories.filter(c => typeof c === 'string' && c.length <= 40).slice(0, 30)
           : ['기타'];
 
-        // 응답이 안 오면 화면이 '분석 중…'에서 영원히 멈춘다. 반드시 끊는다.
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 25000);
-        let g;
-        try {
-          const res = await fetch(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' +
-              encodeURIComponent(env.GEMINI_API_KEY),
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              signal: ctrl.signal,
-              body: JSON.stringify({
-                contents: [{ parts: [
-                  { inline_data: { mime_type: mime, data } },
-                  { text: '이 영수증 사진을 분석해서 JSON만 출력해. 다른 말 금지.\n' +
-                          '형식: {"name":"가게명","amount":숫자,"category":"아래 목록 중 정확히 하나"}\n' +
-                          '카테고리 목록: ' + cats.join(' | ') + '\n' +
-                          'amount는 총 결제금액의 숫자만(쉼표·원 표시 없이). 못 읽으면 amount를 0으로.' },
-                ] }],
-                generationConfig: { temperature: 0.1, maxOutputTokens: 200 },
-              }),
-            }
-          );
-          g = await res.json();
-        } catch (e) {
-          return json({ error: e?.name === 'AbortError' ? 'AI 응답이 너무 늦어요. 직접 입력해 주세요' : 'AI 호출 실패: ' + e.message }, 504);
-        } finally {
-          clearTimeout(timer);
-        }
+        const g = await callGemini(env, key, {
+          contents: [{ parts: [
+            { inline_data: { mime_type: mime, data } },
+            { text: '이 영수증 사진을 분석해서 JSON만 출력해. 다른 말 금지.\n' +
+                    '형식: {"name":"가게명","amount":숫자,"category":"아래 목록 중 정확히 하나"}\n' +
+                    '카테고리 목록: ' + cats.join(' | ') + '\n' +
+                    'amount는 총 결제금액의 숫자만(쉼표·원 표시 없이). 못 읽으면 amount를 0으로.' },
+          ] }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 200 },
+        });
+        if (g.err) return json({ error: g.err }, 502);
 
-        if (g?.error) {
-          console.warn('Gemini 오류:', JSON.stringify(g.error).slice(0, 300));
-          return json({ error: 'AI 인식에 실패했어요. 직접 입력해 주세요' }, 502);
-        }
-        const text = g?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const text = g.text || '';
         const jm = text.match(/\{[\s\S]*\}/); // 모델이 ```json 같은 걸 붙여도 건져낸다
         if (!jm) return json({ error: '영수증을 알아보지 못했어요. 직접 입력해 주세요' }, 422);
         let parsed;
@@ -293,39 +431,18 @@ export default {
       // ── 소비 패턴 분석 (통계 화면) ──
       //  앱이 이미 집계한 요약문만 보내온다. 원본 거래를 통째로 보내지 않으므로 외부로 나가는 정보가 적다.
       if (path === '/api/ai/analyze' && request.method === 'POST') {
-        if (!env.GEMINI_API_KEY) return json({ error: 'AI 분석이 아직 설정되지 않았어요' }, 503);
+        const key = await geminiKey(env);
+        if (!key) return json({ error: 'AI 분석이 아직 설정되지 않았어요. 설정 화면에서 API 키를 넣어주세요' }, 503);
         const b = await request.json().catch(() => ({}));
         const summary = String(b?.summary || '');
         if (!summary || summary.length > 4000) return json({ error: '분석할 내용이 올바르지 않아요' }, 400);
 
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 25000);
-        let g;
-        try {
-          const res = await fetch(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' +
-              encodeURIComponent(env.GEMINI_API_KEY),
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              signal: ctrl.signal,
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: summary }] }],
-                generationConfig: { temperature: 0.7, maxOutputTokens: 600 },
-              }),
-            }
-          );
-          g = await res.json();
-        } catch (e) {
-          return json({ error: e?.name === 'AbortError' ? 'AI 응답이 너무 늦어요' : 'AI 호출 실패: ' + e.message }, 504);
-        } finally {
-          clearTimeout(timer);
-        }
-        if (g?.error) {
-          console.warn('Gemini 오류:', JSON.stringify(g.error).slice(0, 300));
-          return json({ error: 'AI 분석에 실패했어요' }, 502);
-        }
-        return json({ text: g?.candidates?.[0]?.content?.parts?.[0]?.text || '' });
+        const g = await callGemini(env, key, {
+          contents: [{ parts: [{ text: summary }] }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 600 },
+        });
+        if (g.err) return json({ error: g.err }, 502);
+        return json({ text: g.text || '' });
       }
 
       // ── 영수증 사진 (필요할 때만 한 장씩) ──
