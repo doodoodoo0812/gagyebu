@@ -636,7 +636,7 @@ body {
   <div class="topbar">
     <div class="topbar-title">💰 가계부</div>
     <div class="topbar-actions">
-      <div class="icon-btn" onclick="openThemeModal()" title="테마">🎨</div>
+      <!-- 테마 입구는 설정 한 곳으로 일원화(테마는 한 번 정하면 끝). 상단바는 동기화만. -->
       <div class="icon-btn" id="sync-btn" onclick="syncData()" title="동기화">🔄</div>
     </div>
   </div>
@@ -733,20 +733,8 @@ body {
       <button class="month-btn" onclick="changeMonth(1)">›</button>
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">지출 카테고리 비율</div>
-      </div>
-      <div class="chart-wrap"><canvas id="donut-chart"></canvas></div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">일별 지출</div>
-      </div>
-      <div class="chart-wrap-lg"><canvas id="line-chart"></canvas></div>
-    </div>
-
+    <!-- 도넛(카테고리 비율)은 홈의 '카테고리별 지출' 막대와, 일별 라인은 달력 탭과 겹쳐서 뺐다.
+         통계엔 다른 데서 못 보는 6개월 추이와 AI 총평만 남긴다(차트 3개→1개라 렌더도 가벼워짐). -->
     <div class="card">
       <div class="card-header">
         <div class="card-title">월별 지출 추이</div>
@@ -769,6 +757,7 @@ body {
 
   <!-- BUDGET -->
   <div class="page" id="page-budget">
+    <div onclick="switchPage('settings')" style="font-size:14px;color:var(--accent);cursor:pointer;margin-bottom:8px">‹ 설정</div>
     <div style="margin-bottom:12px">
       <div style="font-size:18px;font-weight:700;color:var(--text);font-family:var(--font-display)">예산 관리</div>
       <div style="font-size:12px;color:var(--text3);margin-top:2px">카테고리별 예산을 설정하고 초과 여부를 확인해요</div>
@@ -850,6 +839,20 @@ body {
     </div>
 
     <div class="settings-section">
+      <div class="settings-title">예산</div>
+      <div class="settings-item" onclick="switchPage('budget')">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">💼</div>
+          <div>
+            <div class="settings-item-text">예산 설정</div>
+            <div class="settings-item-sub">카테고리별 월 예산 (초과 여부는 홈에서 표시)</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-title">정기 지출</div>
       <div id="recurring-list"></div>
       <button class="btn-secondary" onclick="openRecurringModal()">+ 정기 지출 추가</button>
@@ -912,9 +915,6 @@ body {
     </div>
     <div class="nav-item" onclick="switchPage('stats')">
       <div class="nav-icon">📊</div><span>통계</span>
-    </div>
-    <div class="nav-item" onclick="switchPage('budget')">
-      <div class="nav-icon">💼</div><span>예산</span>
     </div>
     <div class="nav-item" onclick="switchPage('settings')">
       <div class="nav-icon">⚙️</div><span>설정</span>
@@ -1004,15 +1004,7 @@ body {
   </div>
 </div>
 
-<!-- THEME MODAL -->
-<div class="modal-backdrop" id="theme-modal">
-  <div class="modal">
-    <div class="modal-handle"></div>
-    <div class="modal-title">테마 선택</div>
-    <div id="theme-options"></div>
-    <button class="btn-secondary" onclick="closeModal('theme-modal')">닫기</button>
-  </div>
-</div>
+<!-- 테마 모달 제거: 설정 화면의 테마 그리드로 일원화 -->
 
 <!-- BUDGET MODAL -->
 <div class="modal-backdrop" id="budget-modal">
@@ -1730,23 +1722,7 @@ function renderTxItems(items) {
 
 function renderStatsPage() {
   if (typeof Chart === 'undefined') { console.warn('Chart.js not loaded yet'); return; }
-  const tx = getMonthTx();
-  const expenses = tx.filter(t=>t.type==='expense');
-
-  // Donut
-  const catTotals = {};
-  expenses.forEach(t => { catTotals[t.category] = (catTotals[t.category]||0) + t.amount; });
-  const cats = Object.keys(catTotals);
-  const vals = cats.map(c=>catTotals[c]);
-  const palette = ['#4ecdc4','#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff9a3c','#845ec2','#f9c74f','#90be6d','#f3722c','#f8961e','#43aa8b'];
-
-  if (charts.donut) charts.donut.destroy();
-  const ctx1 = document.getElementById('donut-chart').getContext('2d');
-  charts.donut = new Chart(ctx1, {
-    type: 'doughnut',
-    data: { labels: cats, datasets: [{ data: vals, backgroundColor: palette, borderWidth: 2, borderColor: getComputedStyle(document.body).getPropertyValue('--bg2') }] },
-    options: { plugins: { legend: { position:'right', labels: { color: getComputedStyle(document.body).getPropertyValue('--text2'), font:{size:11} } } }, cutout: '60%' }
-  });
+  // 도넛(카테고리 비율)·일별 라인은 각각 홈 막대·달력과 겹쳐서 뺐다. 여기선 6개월 추이만 그린다.
 
   // Bar - last 6 months
   const monthLabels = [], monthExpenses = [], monthIncomes = [];
@@ -1777,33 +1753,6 @@ function renderStatsPage() {
       plugins: { legend: { labels: { color: textColor, font:{size:11} } } },
       scales: {
         x: { ticks: { color: textColor }, grid: { color: gridColor } },
-        y: { ticks: { color: textColor, callback: v => fmtMoneyShort(v) }, grid: { color: gridColor } }
-      }
-    }
-  });
-
-  // Line - daily
-  const daysInMonth = new Date(currentYear, currentMonth+1, 0).getDate();
-  const dailyExp = Array(daysInMonth).fill(0);
-  expenses.forEach(t => { const d = parseInt(t.date.slice(8))-1; dailyExp[d] += t.amount; });
-  if (charts.line) charts.line.destroy();
-  const ctx3 = document.getElementById('line-chart').getContext('2d');
-  const accentColor = getComputedStyle(document.body).getPropertyValue('--accent').trim();
-  charts.line = new Chart(ctx3, {
-    type: 'line',
-    data: {
-      labels: Array.from({length:daysInMonth},(_,i)=>`${i+1}일`),
-      datasets: [{
-        label:'일별 지출', data: dailyExp,
-        borderColor: accentColor, backgroundColor: accentColor+'22',
-        borderWidth: 2, pointRadius: 3, fill: true, tension: 0.4
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: textColor, font:{size:11} } } },
-      scales: {
-        x: { ticks: { color: textColor, maxTicksLimit: 10 }, grid: { color: gridColor } },
         y: { ticks: { color: textColor, callback: v => fmtMoneyShort(v) }, grid: { color: gridColor } }
       }
     }
@@ -1917,7 +1866,7 @@ function setTheme(t) {
   setTimeout(() => { renderStatsPage(); }, 100);
 }
 
-function openThemeModal() { openModal('theme-modal'); renderThemeGrids(); }
+// 테마 모달은 제거했다(설정의 테마 그리드로 일원화). renderThemeGrids는 설정 그리드에 계속 쓴다.
 
 // ===== MODALS =====
 function openModal(id) { document.getElementById(id).classList.add('open'); }
@@ -2493,8 +2442,10 @@ function switchPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  const navMap = { home:0, history:1, calendar:2, stats:3, budget:4, settings:5 };
-  document.querySelectorAll('.nav-item')[navMap[name]]?.classList.add('active');
+  // 예산은 바텀네비에서 뺐다(설정 안으로). 예산 페이지를 보는 동안은 설정 탭을 활성으로 둔다.
+  const navMap = { home:0, history:1, calendar:2, stats:3, settings:4 };
+  const activeIdx = name === 'budget' ? navMap.settings : navMap[name];
+  document.querySelectorAll('.nav-item')[activeIdx]?.classList.add('active');
   if (name === 'stats') renderStatsPage();
   if (name === 'history') renderHistoryPage();
   if (name === 'calendar') renderCalendarPage();
