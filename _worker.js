@@ -146,10 +146,11 @@ async function geminiKey(env) {
 // 모델명을 코드에 박아두면 구글이 그 모델을 폐기하는 순간 기능이 통째로 죽는다.
 // 실제로 gemini-1.5-flash가 폐기돼서 영수증 인식이 아무 설명 없이 안 됐다.
 // 그래서 쓸 수 있는 모델을 물어보고 고른다.
-function pickGeminiModel(models) {
+function pickGeminiModel(models, exclude) {
   const id = m => String(m.name || '').replace(/^models\//, '');
+  const skip = exclude instanceof Set ? exclude : new Set();
   const usable = (models || []).filter(m =>
-    (m.supportedGenerationMethods || []).includes('generateContent') && /^gemini-/.test(id(m))
+    (m.supportedGenerationMethods || []).includes('generateContent') && /^gemini-/.test(id(m)) && !skip.has(id(m))
   );
   const score = (m) => {
     const n = id(m);
@@ -221,16 +222,27 @@ async function callGemini(env, key, body) {
     }
   };
 
+  const dead = (rr) => rr.status === 404 || /not found|is not supported|deprecated/i.test(rr.data?.error?.message || '');
+
   let r = await once(model);
   if (r.err) return r;
 
-  // 모델이 폐기·삭제된 경우. 이게 바로 gemini-1.5-flash 때 앱이 죽은 상황이다. 스스로 회복한다.
-  if (r.status === 404 || /not found|is not supported|deprecated/i.test(r.data?.error?.message || '')) {
-    console.warn('모델', model, '을(를) 못 씀 → 재탐지');
-    const fresh = await currentGeminiModel(env, key, true);
-    if (fresh && fresh !== model) {
-      r = await once(fresh);
+  // 모델이 폐기·삭제된 경우. gemini-1.5-flash 때 앱이 죽은 그 상황이다. 스스로 회복한다.
+  // 실패한 모델을 '제외'하고 다음 후보를 고른다 — 안 그러면 ListModels에 아직 남아있는 죽은 모델을
+  // 또 골라 무한히 같은 실패를 반복한다(예전 버그).
+  if (dead(r)) {
+    const excluded = new Set([model]);
+    const { models } = await listGeminiModels(key);
+    for (let i = 0; i < 3; i++) {   // 죽은 모델을 차례로 빼며 최대 3개 후보까지 시도
+      const picked = pickGeminiModel(models, excluded);
+      if (!picked) break;
+      console.warn('모델', model, '실패 → 다음 후보', picked.model);
+      await setSetting(env, 'gemini_model', picked.model);
+      model = picked.model;
+      r = await once(model);
       if (r.err) return r;
+      if (!dead(r)) break;
+      excluded.add(model);
     }
   }
   if (r.data?.error) {
@@ -262,7 +274,23 @@ export default {
       // ── 로그인 ──
       if (path === '/api/login' && request.method === 'POST') {
         const b = await request.json().catch(() => ({}));
-        // 무차별 대입 속도를 떨어뜨린다. 비밀번호가 하나뿐이라 이 지연이 유일한 방어선이다.
+
+        // IP별 레이트리밋. 400ms 지연은 요청 안에서만 걸려 병렬 공격엔 무력하므로, 실제 방어는 이 카운터다.
+        // append-only INSERT 후 카운트라 병렬 요청도 각자 한 건씩 쌓여 throttle을 못 피한다.
+        const ip = request.headers.get('CF-Connecting-IP') || 'local';
+        const now = Date.now();
+        const WINDOW = 10 * 60 * 1000, LIMIT = 10;   // 10분에 10회
+        try {
+          await env.DB.prepare(`DELETE FROM login_attempts WHERE at < ?1`).bind(now - WINDOW).run();
+          await env.DB.prepare(`INSERT INTO login_attempts (ip, at) VALUES (?1, ?2)`).bind(ip, now).run();
+          const c = await env.DB.prepare(`SELECT COUNT(*) AS n FROM login_attempts WHERE ip = ?1 AND at > ?2`)
+                                .bind(ip, now - WINDOW).first();
+          if ((c?.n || 0) > LIMIT) {
+            return json({ error: '로그인 시도가 너무 많아요. 잠시 후 다시 시도해 주세요' }, 429);
+          }
+        } catch (e) { /* 카운터 실패가 로그인을 막지는 않게 한다 */ }
+
+        // 무차별 대입 속도를 떨어뜨린다(보조 수단).
         await new Promise((r) => setTimeout(r, 400));
         if (!safeEqual(b?.password ?? '', env.APP_PASSWORD)) {
           return json({ error: '비밀번호가 맞지 않아요' }, 401);
@@ -453,12 +481,14 @@ export default {
         return json({ photo_url: row.photo_url });
       }
 
-      // ── 특정 월 영수증 갤러리 (사용자가 갤러리를 열 때만) ──
+      // ── 특정 월 영수증 갤러리 (목록만; 사진은 각 썸네일이 /api/tx/:id/photo로 지연 로드) ──
+      //  photo_url을 여기서 다 실으면 사진이 쌓일수록 응답이 수 MB~수십 MB가 되어 셀룰러에서 느리고
+      //  큰 달은 아예 실패한다. 목록엔 메타만, 이미지는 화면에 보일 때 한 장씩.
       if (path === '/api/receipts' && request.method === 'GET') {
         const month = url.searchParams.get('month');
         if (!isMonth(month)) return json({ error: '월 형식이 올바르지 않아요' }, 400);
         const r = await env.DB.prepare(
-          `SELECT id, date, name, amount, photo_url FROM transactions
+          `SELECT id, date, name, amount FROM transactions
            WHERE photo_url IS NOT NULL AND date LIKE ?1 ORDER BY date DESC`
         ).bind(month + '-%').all();
         return json({ receipts: r.results ?? [] });
@@ -537,24 +567,31 @@ export default {
         for (const rule of rules) {
           const day = Math.min(rule.day, lastDay); // 31일 규칙이 30일 달에서 없는 날짜가 되지 않도록
           if (day > todayDay) continue;            // 아직 그날이 안 됨
-          const claim = await env.DB.prepare(
-            `INSERT OR IGNORE INTO recurring_applied (rule_id, ym) VALUES (?1,?2)`
-          ).bind(rule.id, ym).run();
-          if (!claim.meta.changes) continue;       // 이미 이 달에 등록했음
-
           const txId = crypto.randomUUID();
+          const dateStr = `${ym}-${String(day).padStart(2, '0')}`;
+
+          // claim과 거래 삽입을 batch(한 트랜잭션)로 묶는다. 예전엔 claim 먼저 넣고 그 다음 거래를
+          // 넣었는데, 그 사이에 워커가 죽으면 claim만 남아 그 달이 영구 누락됐다(재실행해도 이미
+          // 등록됨으로 판단). batch는 둘 다 커밋되거나 둘 다 안 된다.
+          //   1) (규칙,달)을 tx_id와 함께 선점(INSERT OR IGNORE). 이미 있으면 무시된다.
+          //   2) 거래는 '이 호출의 선점이 이긴 경우에만' 넣는다 — 저장된 tx_id가 내 txId와 같을 때.
+          //      부부가 동시에 열면 한쪽만 선점에 성공하므로 중복 거래가 안 생긴다.
+          let res;
           try {
-            await env.DB.prepare(
-              `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name)
-               VALUES (?1,?2,'expense',?3,?4,?5,'자동 등록',NULL,1,'')`
-            ).bind(txId, `${ym}-${String(day).padStart(2, '0')}`, rule.category, rule.name, rule.amount).run();
+            res = await env.DB.batch([
+              env.DB.prepare(`INSERT OR IGNORE INTO recurring_applied (rule_id, ym, tx_id) VALUES (?1,?2,?3)`)
+                    .bind(rule.id, ym, txId),
+              env.DB.prepare(
+                `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name)
+                 SELECT ?1,?2,'expense',?3,?4,?5,'자동 등록',NULL,1,''
+                 WHERE (SELECT tx_id FROM recurring_applied WHERE rule_id=?6 AND ym=?7) = ?1`
+              ).bind(txId, dateStr, rule.category, rule.name, rule.amount, rule.id, ym),
+            ]);
           } catch (e) {
-            // 거래를 못 넣었으면 등록 표시도 되돌린다. 안 그러면 영영 등록되지 않는다.
-            await env.DB.prepare(`DELETE FROM recurring_applied WHERE rule_id=?1 AND ym=?2`).bind(rule.id, ym).run();
             console.warn('정기 지출 자동 등록 실패:', rule.name, String(e?.message || e));
             continue;
           }
-          await env.DB.prepare(`UPDATE recurring_applied SET tx_id=?1 WHERE rule_id=?2 AND ym=?3`).bind(txId, rule.id, ym).run();
+          if (!res?.[1]?.meta?.changes) continue;  // 이미 등록됐거나 선점 못 함 → 새로 만든 거 없음
           const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(txId).first();
           if (row) created.push(row);
         }

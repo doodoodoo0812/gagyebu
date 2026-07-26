@@ -1301,6 +1301,10 @@ async function api(path, { method = 'GET', body } = {}) {
   if (res.status === 401 && path !== '/login') {
     authToken = null;
     localStorage.removeItem('auth_token');
+    // 여기서 화면도 로그인으로 돌려줘야 한다. 안 그러면 저장/삭제 중 토큰이 만료된 경우
+    // 화면은 멀쩡한데 그 뒤 모든 요청이 조용히 실패해 사용자가 원인을 알 수 없다.
+    hideAllScreens();
+    document.getElementById('login-screen').style.display = 'flex';
     throw new Error('로그인이 필요해요');
   }
   if (!res.ok) throw new Error(data?.error || `요청 실패 (${res.status})`);
@@ -1463,6 +1467,7 @@ function useDemoMode() {
 }
 
 // ===== DATA LOAD =====
+let loadSeq = 0;   // 월을 빠르게 넘기면 여러 loadData가 겹친다. 마지막 것만 화면에 반영하기 위한 순번.
 async function loadData() {
   if (demoMode) {
     transactions = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
@@ -1470,13 +1475,16 @@ async function loadData() {
   } else if (authToken) {
     // 상한은 '다음 달 1일 미만'. 하한은 5개월 전 1일 —
     // 통계의 '월별 지출 추이'가 6개월을 그리고 전월 비교도 이 배열을 쓰기 때문에 6개월치를 부른다.
+    const seq = ++loadSeq;
     try {
       const r = await api(`/data?from=${monthStrOffset(-5)}-01&to=${getNextMonthStr()}-01&month=${getMonthStr()}`);
+      // 그새 더 최근 요청이 시작됐으면(달을 또 넘겼으면) 이 옛 응답은 버린다.
+      // 안 그러면 늦게 도착한 이전 달 데이터가 현재 달 화면을 덮어쓴다.
+      if (seq !== loadSeq) return;
       transactions = r.transactions || [];
       budgets = r.budgets || [];
     } catch(e) {
-      showToast('❌ 불러오기 실패: ' + e.message);
-      if (!authToken) { hideAllScreens(); document.getElementById('login-screen').style.display = 'flex'; }
+      if (seq === loadSeq) showToast('❌ 불러오기 실패: ' + e.message);
       return;
     }
   } else {
@@ -1838,7 +1846,12 @@ function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
 // Modal backdrop click to close (runs after DOM ready)
+let _backdropsInit = false;
 function initModalBackdrops() {
+  // initApp과 showApp 양쪽에서 부른다. 익명 함수라 addEventListener가 중복 제거를 못 해서
+  // 리스너가 2개씩 붙었고, 그 결과 '작성 내용이 사라집니다' 확인창이 한 번의 탭에 두 번 떴다.
+  if (_backdropsInit) return;
+  _backdropsInit = true;
   document.querySelectorAll('.modal-backdrop').forEach(b => {
     b.addEventListener('click', e => {
       if (e.target !== b) return;
@@ -2863,12 +2876,29 @@ function openReceiptGallery() {
     months.push(val);
   }
   sel.innerHTML = months.map(m => `<option value="${m}">${m.replace('-','년 ')}월</option>`).join('');
-  renderReceiptGallery();
+  // 모달을 먼저 연다. 렌더가 먼저면 IntersectionObserver를 display:none 상태에서 붙여 썸네일이 안 뜬다.
   openModal('receipt-modal');
+  renderReceiptGallery();
 }
 
-// 사진은 목록 응답에 없다(용량 때문에 제외). 갤러리를 열 때 그 달치만 따로 받아온다.
+// 갤러리 목록엔 사진이 없다(용량). 각 썸네일은 화면에 보일 때 /api/tx/:id/photo로 한 장씩 받아온다.
+// 데모 모드는 메모리에 photo_url이 이미 있어 그대로 쓴다.
 let galleryReceipts = [];
+const galleryPhotoCache = {};   // id → data URL (미리보기에서 재사용)
+
+async function loadReceiptPhoto(id) {
+  if (galleryPhotoCache[id] !== undefined) return galleryPhotoCache[id];
+  if (demoMode) {
+    const t = transactions.find(x => x.id === id);
+    return galleryPhotoCache[id] = safePhoto(t?.photo_url) || '';
+  }
+  try {
+    const r = await api('/tx/' + encodeURIComponent(id) + '/photo');
+    return galleryPhotoCache[id] = safePhoto(r?.photo_url) || '';
+  } catch(e) {
+    return galleryPhotoCache[id] = '';
+  }
+}
 
 async function renderReceiptGallery() {
   const month = document.getElementById('receipt-month-select').value;
@@ -2876,13 +2906,14 @@ async function renderReceiptGallery() {
   const empty = document.getElementById('receipt-gallery-empty');
 
   if (demoMode) {
-    galleryReceipts = transactions.filter(t => t.date.startsWith(month) && safePhoto(t.photo_url));
+    galleryReceipts = transactions.filter(t => t.date.startsWith(month) && safePhoto(t.photo_url))
+                                  .map(t => ({ id:t.id, date:t.date, name:t.name, amount:t.amount }));
   } else if (authToken) {
     grid.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">불러오는 중…</div>';
     empty.style.display = 'none';
     try {
       const r = await api('/receipts?month=' + encodeURIComponent(month));
-      galleryReceipts = (r.receipts || []).filter(t => safePhoto(t.photo_url));
+      galleryReceipts = r.receipts || [];
     } catch(e) {
       grid.innerHTML = '';
       empty.style.display = 'block';
@@ -2899,18 +2930,38 @@ async function renderReceiptGallery() {
     return;
   }
   empty.style.display = 'none';
+  // 타일 높이는 img가 아니라 위쪽 사진칸(aspect-ratio:1) 자체에 준다. 사진이 로드되기 전에도
+  // 칸이 찌그러지지 않도록. img는 그 칸을 채우기만 한다.
   grid.innerHTML = galleryReceipts.map(t => `
-    <div data-id="${esc(t.id)}" onclick="previewReceipt(this.dataset.id)" style="cursor:pointer;border-radius:8px;overflow:hidden;aspect-ratio:1;background:var(--surface2)">
-      <img src="${safePhoto(t.photo_url)}" style="width:100%;height:100%;object-fit:cover">
+    <div data-id="${esc(t.id)}" onclick="previewReceipt(this.dataset.id)" style="cursor:pointer;border-radius:8px;overflow:hidden;background:var(--surface2)">
+      <div style="aspect-ratio:1;width:100%;background:var(--surface2)">
+        <img data-thumb="${esc(t.id)}" style="width:100%;height:100%;object-fit:cover;display:block">
+      </div>
       <div style="padding:3px 4px;font-size:9px;color:var(--text3);background:var(--surface);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.name)}</div>
     </div>
   `).join('');
+
+  // 썸네일을 한 장씩 받아 채운다. 동시성을 4로 제한해 한꺼번에 몰리지 않게(옛날엔 한 응답에 다 실어 터졌다).
+  // IntersectionObserver 대신 직접 로드하는 이유: 갤러리는 사용자가 일부러 연 화면이라 어차피 다 보고,
+  // 관찰자는 모달 스크롤·백그라운드 탭 등에서 콜백이 안 오는 경우가 있어 사진이 안 뜰 위험이 있다.
+  const thumbs = [...grid.querySelectorAll('img[data-thumb]')];
+  let ti = 0;
+  const worker = async () => {
+    while (ti < thumbs.length) {
+      const img = thumbs[ti++];
+      const url = await loadReceiptPhoto(img.dataset.thumb);
+      if (url && img.isConnected) img.src = url;
+    }
+  };
+  for (let k = 0; k < 4; k++) worker();
 }
 
-function previewReceipt(id) {
+async function previewReceipt(id) {
   const tx = galleryReceipts.find(t => t.id === id);
-  if (!tx || !safePhoto(tx.photo_url)) return;
-  document.getElementById('receipt-preview-img').src = safePhoto(tx.photo_url);
+  if (!tx) return;
+  const url = await loadReceiptPhoto(id);
+  if (!url) { showToast('사진을 불러오지 못했어요'); return; }
+  document.getElementById('receipt-preview-img').src = url;
   document.getElementById('receipt-preview-info').textContent = `${tx.date} · ${tx.name} · ${fmtMoney(tx.amount)}`;
   openModal('receipt-preview-modal');
 }
@@ -3068,7 +3119,7 @@ function openMonthlyReport() {
         <div style="width:28px;text-align:center">${emoji}</div>
         <div style="flex:1">
           <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-            <span style="color:var(--text)">${cat}</span>
+            <span style="color:var(--text)">${esc(cat)}</span>
             <span style="font-family:var(--font-mono);color:var(--expense)">${fmtMoney(amt)}</span>
           </div>
           <div style="height:4px;background:var(--bg3);border-radius:2px">
@@ -3083,7 +3134,7 @@ function openMonthlyReport() {
     <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin:12px 0 8px">👫 인별 지출</div>
     ${Object.entries(personTotals).map(([name,amt]) => `
       <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px">
-        <span style="font-size:13px;color:var(--text)">${name}</span>
+        <span style="font-size:13px;color:var(--text)">${esc(name)}</span>
         <span style="font-family:var(--font-mono);font-size:13px;color:var(--expense)">${fmtMoney(amt)}</span>
       </div>`).join('')}` : ''}
 

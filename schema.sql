@@ -80,3 +80,11 @@ CREATE TABLE app_settings (
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 로그인 무차별 대입 방어. 비밀번호가 하나뿐이라 400ms 지연만으론 병렬 공격을 못 막는다.
+-- IP별 최근 10분 시도 횟수를 세어 임계 초과 시 429. append-only라 병렬 요청에도 카운트가 안 샌다.
+CREATE TABLE login_attempts (
+  ip TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE INDEX idx_login_at ON login_attempts(at);
