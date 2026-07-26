@@ -381,6 +381,8 @@ body {
   cursor: pointer; font-family: var(--font-main);
   transition: all var(--transition); margin-top: 8px;
 }
+/* 문자/영수증 빠른입력 버튼이 열려 있을 때 강조 */
+.btn-secondary.active { border-color: var(--accent); color: var(--accent); }
 
 /* ===== CHARTS ===== */
 .chart-wrap { position: relative; height: 200px; margin: 8px 0; }
@@ -928,8 +930,13 @@ body {
     <div class="modal-handle"></div>
     <div class="modal-title" id="add-modal-title">거래 추가</div>
 
-    <div class="form-group">
-      <label class="form-label">💬 결제 문자 붙여넣기</label>
+    <!-- 손입력이 기본. 문자·사진은 버튼 뒤로 접어 매번 스크롤로 지나치지 않게 한다. -->
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button type="button" class="btn-secondary" id="quick-sms-btn" onclick="toggleQuickInput('sms')" style="flex:1;margin:0;padding:10px;font-size:13px">💬 문자 붙여넣기</button>
+      <button type="button" class="btn-secondary" id="quick-photo-btn" onclick="toggleQuickInput('photo')" style="flex:1;margin:0;padding:10px;font-size:13px">📷 영수증 사진</button>
+    </div>
+
+    <div class="form-group" id="sms-block" style="display:none">
       <div
         class="sms-paste-area"
         id="sms-paste-area"
@@ -940,16 +947,13 @@ body {
       <div id="sms-result" style="display:none;margin-top:6px"></div>
     </div>
 
-    <div style="text-align:center;color:var(--text3);font-size:12px;margin:-8px 0 8px">또는</div>
-
-    <div class="form-group">
-      <label class="form-label">📷 영수증 사진 (AI 자동 인식)</label>
+    <div class="form-group" id="photo-block" style="display:none">
       <div class="photo-upload" id="photo-upload-area">
-        <input type="file" accept="image/*"  id="photo-input" onchange="handlePhotoSelect(event)">
+        <input type="file" accept="image/*" id="photo-input" onchange="handlePhotoSelect(event)">
         <div id="photo-placeholder">
           <div style="font-size:32px">📷</div>
           <div style="font-size:13px;color:var(--text2);margin-top:6px;font-weight:500">사진 찍기 또는 갤러리 선택</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:4px">찍으면 금액·가게명을 자동으로 입력해요</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:4px">AI 키를 넣으면 금액·가게명을 자동 인식해요</div>
         </div>
         <img id="photo-preview" class="photo-preview" style="display:none">
       </div>
@@ -978,8 +982,10 @@ body {
     </div>
 
     <div class="form-group">
-      <label class="form-label">항목명</label>
-      <input class="form-input" id="tx-name" placeholder="예: 마트 장보기">
+      <label class="form-label">항목명 <span style="color:var(--text3);font-weight:400">(비우면 카테고리명으로 저장)</span></label>
+      <div id="name-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
+      <input class="form-input" id="tx-name" list="name-suggestions" placeholder="예: 이마트 (선택)" autocomplete="off">
+      <datalist id="name-suggestions"></datalist>
     </div>
 
     <div class="form-group">
@@ -1874,24 +1880,79 @@ function addModalHasInput() {
 let currentTxType = 'expense';
 let selectedCategory = '';
 
-function openAddModal(tx = null) {
-  currentEditTx = tx;
+// 문자/사진 빠른입력 블록 접기. 기본은 접힘 — 손입력이 1급이라 매번 스크롤로 지나치지 않게.
+function resetQuickBlocks() {
+  document.getElementById('sms-block').style.display = 'none';
+  document.getElementById('photo-block').style.display = 'none';
+  document.getElementById('quick-sms-btn').classList.remove('active');
+  document.getElementById('quick-photo-btn').classList.remove('active');
+}
+function toggleQuickInput(which) {
+  const block = document.getElementById(which + '-block');
+  const btn = document.getElementById('quick-' + which + '-btn');
+  const show = block.style.display === 'none';
+  block.style.display = show ? 'block' : 'none';
+  btn.classList.toggle('active', show);
+  if (show && which === 'sms') document.getElementById('sms-paste-area').focus();
+}
+
+// 이름칸 자동완성: 이미 받아둔 거래에서 최근에 쓴 가게명을 모은다(라이브러리 0, 네이티브 datalist).
+function updateNameSuggestions() {
+  const seen = new Set(), list = [];
+  for (const t of [...transactions].reverse()) {        // 최근 것부터
+    const n = (t.name || '').trim();
+    if (n && !seen.has(n)) { seen.add(n); list.push(n); }
+    if (list.length >= 40) break;
+  }
+  document.getElementById('name-suggestions').innerHTML = list.map(n => `<option value="${esc(n)}">`).join('');
+}
+// 고른 카테고리에서 최근 쓴 가게 몇 개를 칩으로 → 한 번 탭하면 이름 완성(타이핑 0).
+function renderNameChips() {
+  const box = document.getElementById('name-chips');
+  if (!box) return;
+  const seen = new Set(), chips = [];
+  for (const t of [...transactions].reverse()) {
+    if (t.category !== selectedCategory) continue;
+    const n = (t.name || '').trim();
+    if (n && n !== selectedCategory && !seen.has(n)) { seen.add(n); chips.push(n); }
+    if (chips.length >= 4) break;
+  }
+  box.innerHTML = chips.map(n =>
+    `<span onclick="document.getElementById('tx-name').value='${esc(n).replace(/'/g,"\\'")}'"
+       style="padding:5px 10px;background:var(--surface2);border-radius:14px;font-size:12px;color:var(--text2);cursor:pointer">${esc(n)}</span>`
+  ).join('');
+}
+
+// tx=null 새 거래 / tx=거래 수정 / clone=true면 그 거래 내용으로 '새' 거래(복제)
+function openAddModal(tx = null, clone = false) {
+  currentEditTx = clone ? null : tx;
   selectedPhotoBase64 = null;
-  // 이걸 비우지 않으면 방금 고른 사진을 다시 고를 때 change 이벤트가 안 나서
-  // 아무 반응이 없다(사용자는 앱이 고장난 줄 알고 몇 번씩 다시 고르다 포기한다).
-  document.getElementById('photo-input').value = '';
+  document.getElementById('photo-input').value = '';   // 같은 사진 재선택 시 무반응 방지
   document.getElementById('photo-preview').style.display = 'none';
   document.getElementById('photo-placeholder').style.display = 'block';
   document.getElementById('ai-loading').style.display = 'none';
   document.getElementById('ai-result').style.display = 'none';
+  document.getElementById('sms-paste-area').innerText = '';
+  document.getElementById('sms-result').style.display = 'none';
+  resetQuickBlocks();
+  document.getElementById('name-chips').innerHTML = '';
+  updateNameSuggestions();
 
-  if (tx) {
+  if (tx && !clone) {
     document.getElementById('add-modal-title').textContent = '거래 수정';
     setType(tx.type);
     document.getElementById('tx-amount').value = tx.amount;
     document.getElementById('tx-name').value = tx.name;
     document.getElementById('tx-date').value = tx.date;
     document.getElementById('tx-memo').value = tx.memo || '';
+    selectedCategory = tx.category;
+  } else if (tx && clone) {
+    document.getElementById('add-modal-title').textContent = '거래 추가';
+    setType(tx.type);
+    document.getElementById('tx-amount').value = tx.amount;
+    document.getElementById('tx-name').value = tx.name || '';
+    document.getElementById('tx-date').value = todayLocal();   // 복제는 오늘 날짜로
+    document.getElementById('tx-memo').value = '';
     selectedCategory = tx.category;
   } else {
     document.getElementById('add-modal-title').textContent = '거래 추가';
@@ -1900,14 +1961,12 @@ function openAddModal(tx = null) {
     document.getElementById('tx-name').value = '';
     document.getElementById('tx-date').value = todayLocal();
     document.getElementById('tx-memo').value = '';
-    document.getElementById('sms-paste-area').innerText = '';
-    document.getElementById('sms-result').style.display = 'none';
     selectedCategory = '';
   }
   renderCategoryGrid(currentTxType);
+  renderNameChips();
   openModal('add-modal');
-  // setTimeout 안에서 focus()하면 사용자 제스처 컨텍스트를 벗어나 iOS가 키보드를 안 띄운다.
-  // (테두리만 파래지고 키보드가 안 올라와서 금액칸을 한 번 더 눌러야 했다)
+  // setTimeout 안에서 focus()하면 제스처 컨텍스트를 벗어나 iOS가 키보드를 안 띄운다.
   document.getElementById('tx-amount').focus();
 }
 
@@ -1933,6 +1992,7 @@ function renderCategoryGrid(type) {
 function selectCategory(key) {
   selectedCategory = key;
   renderCategoryGrid(currentTxType);
+  renderNameChips();   // 카테고리를 고르면 그 카테고리의 최근 가게를 칩으로 (한 탭으로 이름 완성)
 }
 
 function renderCategoryGrids() {
@@ -1946,12 +2006,13 @@ function renderCategoryGrids() {
 
 async function saveTransaction() {
   const amount = parseInt(document.getElementById('tx-amount').value);
-  const name = document.getElementById('tx-name').value.trim();
   const date = document.getElementById('tx-date').value;
   const memo = document.getElementById('tx-memo').value.trim();
   if (!amount || amount <= 0) { showToast('금액을 입력해 주세요'); return; }
-  if (!name) { showToast('항목명을 입력해 주세요'); return; }
   if (!selectedCategory) { showToast('카테고리를 선택해 주세요'); return; }
+  // 항목명을 비우면 카테고리명으로 저장한다. 카페·마트처럼 카테고리가 곧 이름인 소액 지출은
+  // 매번 이름을 치지 않아도 되게 — 하루에 가장 많이 반복하는 입력의 타이핑 한 번을 없앤다.
+  const name = document.getElementById('tx-name').value.trim() || selectedCategory;
 
   // 사진은 잘라서 저장하던 것을(그래서 전부 못 쓰게 됐다) 통째로 저장한다.
   // 수정 시 새 사진을 안 고르면 기존 사진을 유지해야 한다 — 예전엔 수정할 때마다 사진이 날아갔다.
@@ -2118,6 +2179,7 @@ function openDetail(id) {
     </div>
     ${tx.memo?`<div class="card" style="margin-bottom:12px"><div style="font-size:12px;color:var(--text2)">📝 ${esc(tx.memo)}</div></div>`:''}
     <div id="detail-photo">${hasPhoto(tx)?'<div class="card" style="margin-bottom:12px;text-align:center;color:var(--text3);font-size:13px">📷 사진 불러오는 중…</div>':''}</div>
+    <button class="btn-secondary" onclick="closeModal('detail-modal');openAddModal(currentEditTx, true)" style="margin-bottom:8px">🔁 같은 걸로 오늘 추가</button>
     <button class="btn-secondary" onclick="closeModal('detail-modal');openAddModal(currentEditTx)" style="margin-bottom:8px">✏️ 수정</button>
   `;
   openModal('detail-modal');
