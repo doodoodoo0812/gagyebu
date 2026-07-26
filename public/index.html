@@ -674,6 +674,7 @@ body {
         <div class="card-title">이번 달 지출 vs 지난 달</div>
       </div>
       <div class="compare-grid" id="month-compare"></div>
+      <div id="home-change" style="display:none"></div>
     </div>
 
     <div class="card">
@@ -1618,9 +1619,62 @@ function renderHomePage() {
   }).join('');
   document.getElementById('cat-bars').innerHTML = html || '<div class="empty-state"><p>지출 내역이 없어요</p></div>';
 
+  renderHomeInsights(tx, expense, prev, prevExpense, catTotals);
+
   // Recent tx
   const recent = [...tx].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
   document.getElementById('recent-tx-list').innerHTML = renderTxItems(recent);
+}
+
+// 쌓인 데이터를 홈에서 한눈에 돌려준다. 전부 조건부 — 해당 없으면 숨겨서 화면이 복잡해지지 않게.
+function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
+  const today = new Date();
+  const isThisMonth = currentYear === today.getFullYear() && currentMonth === today.getMonth();
+  const slot = document.getElementById('budget-progress-home');
+  const lines = [];
+
+  // ① 이 속도면 월말 예상 (이번 달 + 지출이 있을 때만)
+  if (isThisMonth && expense > 0) {
+    const elapsed = today.getDate();
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const perDay = expense / elapsed;
+    const projected = Math.round(perDay * daysInMonth);
+    // 전월보다 많으면 빨강, 적으면 초록. 전월 데이터가 없으면 중립.
+    const color = prevExpense > 0 ? (projected > prevExpense ? 'var(--expense)' : 'var(--income)') : 'var(--text2)';
+    lines.push(`<div style="font-size:12px;color:var(--text2);margin-top:2px">
+      📈 이 속도면 월말 <b style="color:${color}">${fmtMoney(projected)}</b>
+      <span style="color:var(--text3)">· 하루 평균 ${fmtMoney(Math.round(perDay))}</span></div>`);
+  }
+
+  // ② 고정 vs 변동 (이번 달 자동등록된 정기지출이 있을 때만)
+  const fixed = tx.filter(t => t.type === 'expense' && t.is_recurring).reduce((s, t) => s + t.amount, 0);
+  if (fixed > 0) {
+    const variable = Math.max(0, expense - fixed);
+    lines.push(`<div style="font-size:12px;color:var(--text2);margin-top:4px">
+      🔒 고정 <b>${fmtMoney(fixed)}</b> <span style="color:var(--text3)">· 🛒 변동 <b>${fmtMoney(variable)}</b></span></div>`);
+  }
+  slot.innerHTML = lines.join('');
+
+  // ③ 전월 대비 가장 많이 변한 카테고리 한 줄 (증가·감소 통틀어, 1만원 미만은 잔소리라 숨김)
+  const changeEl = document.getElementById('home-change');
+  const prevCat = {};
+  prev.filter(t => t.type === 'expense').forEach(t => { prevCat[t.category] = (prevCat[t.category] || 0) + t.amount; });
+  const allCats = new Set([...Object.keys(catTotals), ...Object.keys(prevCat)]);
+  let big = null;
+  for (const c of allCats) {
+    const d = (catTotals[c] || 0) - (prevCat[c] || 0);
+    if (!big || Math.abs(d) > Math.abs(big.d)) big = { c, d, cur: catTotals[c] || 0, prv: prevCat[c] || 0 };
+  }
+  if (big && Math.abs(big.d) >= 10000) {
+    const emoji = [...CATEGORIES.expense, ...CATEGORIES.income].find(x => x.key === big.c)?.emoji || '📦';
+    const up = big.d > 0;
+    const times = big.prv > 0 ? ` (${(big.cur / big.prv).toFixed(1)}배)` : '';
+    changeEl.style.display = 'block';
+    changeEl.innerHTML = `<div style="font-size:12px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:${up ? 'var(--expense)' : 'var(--income)'}">
+      ${up ? '▲' : '👍'} ${emoji} ${esc(big.c)}가 지난달보다 <b>${fmtMoney(Math.abs(big.d))}</b>${up ? ' 늘었어요' + times : ' 줄었어요'}</div>`;
+  } else {
+    changeEl.style.display = 'none';
+  }
 }
 
 function renderHistoryPage() {
@@ -1791,6 +1845,24 @@ function renderBudgetPage() {
             : ''}
       </div>`;
     });
+
+    // 롤업 한 줄: 전부 합쳐 얼마 남았나 + 남은 날 동안 하루 얼마까지. 카테고리 8개를 눈으로 더할 필요 없이.
+    const thisM = budgets.filter(b => b.month === monthStr);
+    const totalBud = thisM.reduce((s, b) => s + b.amount, 0);
+    const totalSpent = thisM.reduce((s, b) => s + (catTotals[b.category] || 0), 0);
+    const remain = totalBud - totalSpent;
+    const today = new Date();
+    const isThisMonth = currentYear === today.getFullYear() && currentMonth === today.getMonth();
+    const daysLeft = isThisMonth ? (new Date(currentYear, currentMonth + 1, 0).getDate() - today.getDate() + 1) : 0;
+    const perDay = daysLeft > 0 && remain > 0 ? Math.floor(remain / daysLeft) : 0;
+    const rollup = `<div class="card" style="margin-bottom:10px;background:var(--surface2)">
+      <div style="font-size:13px;color:var(--text2)">
+        총예산 <b style="color:var(--text)">${fmtMoney(totalBud)}</b> 중
+        <b style="color:${remain < 0 ? 'var(--expense)' : 'var(--income)'}">${remain < 0 ? fmtMoney(-remain) + ' 초과' : fmtMoney(remain) + ' 남음'}</b>
+        ${perDay > 0 ? `<span style="color:var(--text3)"> · 남은 ${daysLeft}일 하루 ${fmtMoney(perDay)}까지</span>` : ''}
+      </div>
+    </div>`;
+    html = rollup + html;
   }
   document.getElementById('budget-list').innerHTML = html;
 }
