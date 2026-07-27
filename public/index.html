@@ -278,9 +278,9 @@ body {
      max()라 430px 미만(폰)에서는 기존 20px가 그대로 쓰인다. */
   position: fixed; bottom: calc(70px + env(safe-area-inset-bottom));
   right: max(20px, calc(50% - 195px));
-  width: 52px; height: 52px; border-radius: 50%;
+  width: 46px; height: 46px; border-radius: 50%;
   background: var(--accent); color: var(--bg);
-  font-size: 24px; font-weight: 300;
+  font-size: 21px; font-weight: 300;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; border: none;
   box-shadow: 0 4px 20px rgba(0,0,0,0.3);
@@ -699,6 +699,11 @@ body {
       <button class="month-btn" onclick="changeMonth(1)">›</button>
     </div>
 
+    <div style="padding:0 4px 8px">
+      <input class="form-input" id="tx-search" type="search" inputmode="search"
+             placeholder="🔎 이름·메모·카테고리 검색 (최근 6개월)" oninput="onTxSearch(this.value)">
+    </div>
+
     <div class="tab-bar" id="category-filter-tabs">
       <div class="tab-item active" data-cat="전체" onclick="filterByCategory(this)">전체</div>
     </div>
@@ -786,8 +791,8 @@ body {
         <div class="settings-item-left">
           <div class="settings-item-icon">🔓</div>
           <div>
-            <div class="settings-item-text">연결 해제</div>
-            <div class="settings-item-sub">다시 설정해야 앱을 쓸 수 있어요</div>
+            <div class="settings-item-text">로그아웃</div>
+            <div class="settings-item-sub">다시 들어오려면 비밀번호가 필요해요</div>
           </div>
         </div>
         <div class="settings-item-right">›</div>
@@ -830,7 +835,7 @@ body {
         <div class="settings-item-left">
           <div class="settings-item-icon">🤖</div>
           <div>
-            <div class="settings-item-text">영수증 AI 인식</div>
+            <div class="settings-item-text">제미나이 API 키 입력</div>
             <div class="settings-item-sub" id="ai-status">확인 중…</div>
           </div>
         </div>
@@ -974,7 +979,7 @@ body {
 
     <div class="form-group">
       <label class="form-label">금액</label>
-      <input class="form-input amount" id="tx-amount" type="number" inputmode="numeric" placeholder="0">
+      <input class="form-input amount" id="tx-amount" type="text" inputmode="numeric" placeholder="0" oninput="fmtMoneyInput(this)">
     </div>
 
     <div class="form-group">
@@ -1017,7 +1022,7 @@ body {
     </div>
     <div class="form-group">
       <label class="form-label">월 예산</label>
-      <input class="form-input amount" id="budget-amount" type="number" inputmode="numeric" placeholder="0">
+      <input class="form-input amount" id="budget-amount" type="text" inputmode="numeric" placeholder="0" oninput="fmtMoneyInput(this)">
     </div>
     <button class="btn-primary" onclick="saveBudget()">저장</button>
     <button class="btn-secondary" onclick="closeModal('budget-modal')">취소</button>
@@ -1085,7 +1090,7 @@ body {
     </div>
     <div class="form-group">
       <label class="form-label">금액</label>
-      <input class="form-input amount" id="rec-amount" type="number" inputmode="numeric" placeholder="0">
+      <input class="form-input amount" id="rec-amount" type="text" inputmode="numeric" placeholder="0" oninput="fmtMoneyInput(this)">
     </div>
     <div class="form-group">
       <label class="form-label">카테고리</label>
@@ -1182,6 +1187,7 @@ let currentEditTx = null;
 let selectedPhotoBase64 = null;
 let charts = {};
 let selectedCategoryFilter = '전체';
+let txSearchQuery = '';   // 거래 검색어. 있으면 이번 달이 아니라 로드된 6개월 전체에서 찾는다.
 
 const CATEGORIES = {
   expense: [
@@ -1631,11 +1637,15 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
     const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
     const perDay = expense / elapsed;
     const projected = Math.round(perDay * daysInMonth);
+    const remain = daysInMonth - elapsed;
     // 전월보다 많으면 빨강, 적으면 초록. 전월 데이터가 없으면 중립.
     const color = prevExpense > 0 ? (projected > prevExpense ? 'var(--expense)' : 'var(--income)') : 'var(--text2)';
+    const vsPrev = prevExpense > 0
+      ? `<div style="color:var(--text3);margin-top:1px">전월(${fmtMoney(prevExpense)})보다 ${projected>prevExpense?'▲':'▼'} <b style="color:${color}">${fmtMoney(Math.abs(projected-prevExpense))}</b> ${projected>prevExpense?'더 쓸 것 같아요':'덜 쓸 것 같아요'}</div>`
+      : '';
     lines.push(`<div style="font-size:12px;color:var(--text2);margin-top:2px">
       📈 이 속도면 월말 <b style="color:${color}">${fmtMoney(projected)}</b>
-      <span style="color:var(--text3)">· 하루 평균 ${fmtMoney(Math.round(perDay))}</span></div>`);
+      <span style="color:var(--text3)">· 하루 평균 ${fmtMoney(Math.round(perDay))} · ${remain}일 남음</span>${vsPrev}</div>`);
   }
 
   // ② 고정 vs 변동 (이번 달 자동등록된 정기지출이 있을 때만)
@@ -1670,31 +1680,71 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
 }
 
 function renderHistoryPage() {
-  const tx = getMonthTx();
+  const monthTx = getMonthTx();
   document.getElementById('month-label2').textContent = `${currentYear}년 ${currentMonth+1}월`;
 
-  // Category filter tabs
-  const cats = ['전체', ...new Set(tx.map(t=>t.category))];
+  const q = txSearchQuery.trim();
+  const searching = q.length > 0;
+
+  // Category filter tabs — 탭 구성은 늘 '현재 달' 기준(검색 중에도 흔들리지 않게)
+  const cats = ['전체', ...new Set(monthTx.map(t=>t.category))];
   const tabHTML = cats.map(c => `
     <div class="tab-item ${c===selectedCategoryFilter?'active':''}"
          data-cat="${esc(c)}" onclick="filterByCategory(this)">${esc(c)}</div>
   `).join('');
   document.getElementById('category-filter-tabs').innerHTML = tabHTML;
 
-  const filtered = selectedCategoryFilter === '전체' ? tx : tx.filter(t=>t.category===selectedCategoryFilter);
-  const sorted = [...filtered].sort((a,b)=>b.date.localeCompare(a.date));
+  // 검색 중이면 로드된 6개월 전체에서, 아니면 이번 달에서 찾는다.
+  let source = searching ? transactions : monthTx;
+  if (selectedCategoryFilter !== '전체') source = source.filter(t=>t.category===selectedCategoryFilter);
+  if (searching) {
+    const ql = q.toLowerCase();
+    const qDigits = q.replace(/[^0-9]/g,'');   // "13,500"·"13500" 둘 다 금액으로 매칭
+    source = source.filter(t =>
+      (t.name||'').toLowerCase().includes(ql) ||
+      (t.memo||'').toLowerCase().includes(ql) ||
+      (t.category||'').toLowerCase().includes(ql) ||
+      (t.user_name||'').toLowerCase().includes(ql) ||
+      (qDigits.length>=2 && String(t.amount).includes(qDigits))
+    );
+  }
+  const sorted = [...source].sort((a,b)=>b.date.localeCompare(a.date));
 
   // Group by date
+  const dayNames = ['일','월','화','수','목','금','토'];
   const groups = {};
   sorted.forEach(t => { (groups[t.date] = groups[t.date]||[]).push(t); });
   let html = '';
   Object.entries(groups).forEach(([date, items]) => {
     const d = new Date(date);
-    const dayNames = ['일','월','화','수','목','금','토'];
-    html += `<div class="date-group-header">${date.slice(5).replace('-','월 ')}일 (${dayNames[d.getDay()]})</div>`;
+    // 검색결과는 여러 달이 섞이므로 연-월-일을 다 보여준다(안 그러면 어느 달인지 모른다).
+    const header = searching
+      ? `${date} (${dayNames[d.getDay()]})`
+      : `${date.slice(5).replace('-','월 ')}일 (${dayNames[d.getDay()]})`;
+    html += `<div class="date-group-header">${header}</div>`;
     html += renderTxItems(items);
   });
-  document.getElementById('tx-list').innerHTML = html || '<div class="empty-state"><div class="empty-icon">📭</div><p>거래 내역이 없어요</p></div>';
+
+  const countLine = searching
+    ? `<div style="font-size:12px;color:var(--text3);padding:4px 4px 8px">🔎 "${esc(q)}" 검색결과 ${sorted.length}건 · 최근 6개월</div>`
+    : '';
+  const empty = searching
+    ? '<div class="empty-state"><div class="empty-icon">🔍</div><p>검색 결과가 없어요</p></div>'
+    : '<div class="empty-state"><div class="empty-icon">📭</div><p>거래 내역이 없어요</p></div>';
+  document.getElementById('tx-list').innerHTML = countLine + (html || empty);
+}
+
+function onTxSearch(v) {
+  txSearchQuery = v || '';
+  renderHistoryPage();   // 검색은 로컬(로드된 6개월)에서만 거르므로 서버 재요청 없음
+}
+
+// 달을 넘기거나 목록 탭에 새로 들어올 때 검색어를 비운다(검색은 월과 무관하게 6개월을 훑기 때문에
+// 검색어가 남아 있으면 월 선택이 먹지 않는 것처럼 보인다).
+function resetTxSearch() {
+  txSearchQuery = '';
+  const el = document.getElementById('tx-search');
+  if (el) el.value = '';
 }
 
 // 카테고리를 onclick 문자열로 넘기지 않고 dataset에서 읽는다.
@@ -1962,7 +2012,7 @@ function openAddModal(tx = null, clone = false) {
   if (tx && !clone) {
     document.getElementById('add-modal-title').textContent = '거래 수정';
     setType(tx.type);
-    document.getElementById('tx-amount').value = tx.amount;
+    setMoneyInput('tx-amount', tx.amount);
     document.getElementById('tx-name').value = tx.name;
     document.getElementById('tx-date').value = tx.date;
     document.getElementById('tx-memo').value = tx.memo || '';
@@ -1970,7 +2020,7 @@ function openAddModal(tx = null, clone = false) {
   } else if (tx && clone) {
     document.getElementById('add-modal-title').textContent = '거래 추가';
     setType(tx.type);
-    document.getElementById('tx-amount').value = tx.amount;
+    setMoneyInput('tx-amount', tx.amount);
     document.getElementById('tx-name').value = tx.name || '';
     document.getElementById('tx-date').value = todayLocal();   // 복제는 오늘 날짜로
     document.getElementById('tx-memo').value = '';
@@ -2026,7 +2076,7 @@ function renderCategoryGrids() {
 }
 
 async function saveTransaction() {
-  const amount = parseInt(document.getElementById('tx-amount').value);
+  const amount = amountDigits('tx-amount');
   const date = document.getElementById('tx-date').value;
   const memo = document.getElementById('tx-memo').value.trim();
   if (!amount || amount <= 0) { showToast('금액을 입력해 주세요'); return; }
@@ -2166,7 +2216,7 @@ async function analyzeReceiptWithAI(base64) {
     });
     let filled = [];
     if (r.name)   { document.getElementById('tx-name').value = r.name; filled.push('가게명'); }
-    if (r.amount) { document.getElementById('tx-amount').value = r.amount; filled.push('금액'); }
+    if (r.amount) { setMoneyInput('tx-amount', r.amount); filled.push('금액'); }
     if (r.category) {
       const all = [...CATEGORIES.expense, ...CATEGORIES.income].map(c => c.key);
       if (all.includes(r.category)) {
@@ -2260,7 +2310,7 @@ function openBudgetModal() {
 
 async function saveBudget() {
   const cat = document.getElementById('budget-cat').value;
-  const amt = parseInt(document.getElementById('budget-amount').value);
+  const amt = amountDigits('budget-amount');
   if (!amt || amt <= 0) { showToast('금액을 입력해 주세요'); return; }
   const monthStr = getMonthStr();
   const bud = { month: monthStr, category: cat, amount: amt };
@@ -2309,7 +2359,7 @@ async function loadRecurring() {
 
 async function saveRecurring() {
   const name = document.getElementById('rec-name').value.trim();
-  const amount = parseInt(document.getElementById('rec-amount').value);
+  const amount = amountDigits('rec-amount');
   const category = document.getElementById('rec-cat').value;
   const day = parseInt(document.getElementById('rec-day').value);
   if (!name || !amount || !day) { showToast('모두 입력해 주세요'); return; }
@@ -2447,7 +2497,7 @@ function switchPage(name) {
   const activeIdx = name === 'budget' ? navMap.settings : navMap[name];
   document.querySelectorAll('.nav-item')[activeIdx]?.classList.add('active');
   if (name === 'stats') renderStatsPage();
-  if (name === 'history') renderHistoryPage();
+  if (name === 'history') { resetTxSearch(); renderHistoryPage(); }
   if (name === 'calendar') renderCalendarPage();
   window.scrollTo(0, 0);
 }
@@ -2456,6 +2506,7 @@ function changeMonth(delta) {
   // 필터를 유지한 채 월을 넘기면, 그 달에 없는 카테고리라 목록이 텅 비고 활성 탭도 없어
   // 사용자는 데이터가 사라진 줄 안다(빠져나올 단서가 화면에 없다).
   selectedCategoryFilter = '전체';
+  resetTxSearch();
   currentMonth += delta;
   if (currentMonth > 11) { currentMonth = 0; currentYear++; }
   if (currentMonth < 0) { currentMonth = 11; currentYear--; }
@@ -2597,7 +2648,7 @@ function parseSmsText(text) {
   // (예전엔 무조건 setType('expense')라 급여 입금 문자도 지출로 들어갔다)
   setType(result.type === 'income' ? 'income' : 'expense');
 
-  if (result.amount > 0) document.getElementById('tx-amount').value = result.amount;
+  if (result.amount > 0) setMoneyInput('tx-amount', result.amount);
   if (result.name) document.getElementById('tx-name').value = result.name;
   if (result.date) document.getElementById('tx-date').value = result.date;
   if (result.category) {
@@ -3254,6 +3305,24 @@ function exportReportToExcel() {
 }
 
 function fmtMoney(n) { return '₩' + Number(n).toLocaleString('ko-KR'); }
+// 금액 입력칸을 '진짜 돈'처럼 — 입력 즉시 천단위 콤마. type=text라 콤마를 그대로 보여줄 수 있다.
+// (type=number는 콤마를 못 넣는다.) 숫자만 남겨 12자리로 제한(스키마 amount < 1e11).
+function fmtMoneyInput(el) {
+  const before = el.value.length, caret = el.selectionStart ?? before;
+  const digits = el.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '').slice(0, 12);
+  el.value = digits ? Number(digits).toLocaleString('ko-KR') : '';
+  const pos = Math.max(0, caret + (el.value.length - before));
+  try { el.setSelectionRange(pos, pos); } catch (e) {}
+}
+// 콤마 낀 입력칸에서 숫자만 뽑아 정수로. parseInt('94,500')는 94라서 반드시 콤마를 떼야 한다.
+function amountDigits(id) {
+  return parseInt((document.getElementById(id).value || '').replace(/[^0-9]/g, ''), 10);
+}
+// 콤마 낀 금액을 입력칸에 세팅(수정·자동완성·SMS·AI가 값을 채울 때 공통).
+function setMoneyInput(id, n) {
+  const el = document.getElementById(id);
+  el.value = (n > 0) ? Number(n).toLocaleString('ko-KR') : '';
+}
 function fmtMoneyShort(n) {
   if (n >= 10000000) return (n/10000000).toFixed(1)+'천만';
   if (n >= 1000000) return (n/10000).toFixed(0)+'만';
