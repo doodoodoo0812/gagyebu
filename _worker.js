@@ -318,8 +318,14 @@ export default {
         const month = url.searchParams.get('month');
         if (!isDate(from) || !isDate(to) || !isMonth(month)) return json({ error: '조회 기간이 올바르지 않아요' }, 400);
 
+        // 휴지통 자동 비우기 — 삭제한 지 30일 지난 건 여기서 완전삭제(사진까지). 데이터 로드마다 한 번씩 청소.
+        // 실패해도 로딩을 막지 않는다(정리는 다음 기회에 다시 시도).
+        try {
+          await env.DB.prepare(`DELETE FROM transactions WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now','-30 days')`).run();
+        } catch (e) { console.warn('휴지통 자동정리 실패:', String(e?.message || e)); }
+
         const tx = await env.DB.prepare(
-          `SELECT ${TX_COLS} FROM transactions WHERE date >= ?1 AND date < ?2 ORDER BY date DESC`
+          `SELECT ${TX_COLS} FROM transactions WHERE date >= ?1 AND date < ?2 AND deleted_at IS NULL ORDER BY date DESC`
         ).bind(from, to).all();
 
         const bud = await env.DB.prepare(
@@ -332,7 +338,7 @@ export default {
       // ── 전체 거래 (엑셀 '전체 내보내기' 전용) ──
       //  화면용 배열은 6개월치뿐이라, '전체'를 자처하는 파일을 그걸로 만들면 안 된다.
       if (path === '/api/tx/all' && request.method === 'GET') {
-        const r = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions ORDER BY date DESC`).all();
+        const r = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE deleted_at IS NULL ORDER BY date DESC`).all();
         return json({ transactions: r.results ?? [] });
       }
 
@@ -351,7 +357,7 @@ export default {
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,1,?9)`
           ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.user_name).run();
           const row = await env.DB.prepare(
-            `SELECT ${TX_COLS} FROM transactions WHERE date = ?1 AND name = ?2 AND is_recurring = 1`
+            `SELECT ${TX_COLS} FROM transactions WHERE date = ?1 AND name = ?2 AND is_recurring = 1 AND deleted_at IS NULL`
           ).bind(tx.date, tx.name).first();
           return json({ tx: row });
         }
@@ -489,9 +495,44 @@ export default {
         if (!isMonth(month)) return json({ error: '월 형식이 올바르지 않아요' }, 400);
         const r = await env.DB.prepare(
           `SELECT id, date, name, amount FROM transactions
-           WHERE photo_url IS NOT NULL AND date LIKE ?1 ORDER BY date DESC`
+           WHERE photo_url IS NOT NULL AND date LIKE ?1 AND deleted_at IS NULL ORDER BY date DESC`
         ).bind(month + '-%').all();
         return json({ receipts: r.results ?? [] });
+      }
+
+      // ── 휴지통 목록 (소프트 삭제된 거래) ──
+      if (path === '/api/trash' && request.method === 'GET') {
+        const r = await env.DB.prepare(
+          `SELECT ${TX_COLS}, deleted_at FROM transactions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`
+        ).all();
+        return json({ transactions: r.results ?? [] });
+      }
+
+      // ── 휴지통 비우기 (전체 완전삭제) ──
+      if (path === '/api/trash' && request.method === 'DELETE') {
+        const r = await env.DB.prepare(`DELETE FROM transactions WHERE deleted_at IS NOT NULL`).run();
+        return json({ cleared: r.meta.changes });
+      }
+
+      // ── 휴지통에서 한 건 완전삭제 ──
+      if (path.startsWith('/api/trash/') && request.method === 'DELETE') {
+        const id = decodeURIComponent(path.slice('/api/trash/'.length));
+        const r = await env.DB.prepare(`DELETE FROM transactions WHERE id = ?1 AND deleted_at IS NOT NULL`).bind(id).run();
+        if (!r.meta.changes) return json({ error: '삭제할 거래를 찾지 못했어요' }, 404);
+        return json({ ok: true });
+      }
+
+      // ── 휴지통에서 복원 ──
+      //  /api/tx/:id/restore 는 아래 txId(수정/삭제) 파싱보다 먼저 처리해야 한다
+      //  (안 그러면 id가 'xxx/restore'로 잡힌다).
+      if (path.startsWith('/api/tx/') && path.endsWith('/restore') && request.method === 'POST') {
+        const id = decodeURIComponent(path.slice('/api/tx/'.length, -'/restore'.length));
+        const r = await env.DB.prepare(
+          `UPDATE transactions SET deleted_at = NULL WHERE id = ?1 AND deleted_at IS NOT NULL`
+        ).bind(id).run();
+        if (!r.meta.changes) return json({ error: '복원할 거래를 찾지 못했어요' }, 404);
+        const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(id).first();
+        return json({ tx: row });
       }
 
       // ── 거래 수정 / 삭제 ──
@@ -500,10 +541,11 @@ export default {
       if (txId && request.method === 'PATCH') {
         const { tx, err } = cleanTx(await request.json().catch(() => ({})));
         if (err) return json({ error: err }, 400);
+        // 휴지통에 있는 건 수정 대상이 아니다(deleted_at IS NULL).
         const r = await env.DB.prepare(
           `UPDATE transactions SET date=?1, type=?2, category=?3, name=?4, amount=?5, memo=?6, user_name=?7,
                   photo_url = CASE WHEN ?8 = 1 THEN ?9 ELSE photo_url END
-           WHERE id = ?10`
+           WHERE id = ?10 AND deleted_at IS NULL`
         ).bind(tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.user_name,
                tx._setPhoto, tx.photo_url, txId).run();
         if (!r.meta.changes) return json({ error: '수정할 거래를 찾지 못했어요' }, 404);
@@ -511,8 +553,12 @@ export default {
         return json({ tx: row });
       }
 
+      // 삭제는 '소프트 삭제' — 바로 지우지 않고 deleted_at만 찍는다. 30일 뒤 /api/data 로드 때 완전삭제된다.
+      // 실수로 지워도 휴지통에서 되살릴 수 있게. (예전엔 하드 삭제라 복구가 아예 불가능했다)
       if (txId && request.method === 'DELETE') {
-        const r = await env.DB.prepare(`DELETE FROM transactions WHERE id = ?1`).bind(txId).run();
+        const r = await env.DB.prepare(
+          `UPDATE transactions SET deleted_at = datetime('now') WHERE id = ?1 AND deleted_at IS NULL`
+        ).bind(txId).run();
         if (!r.meta.changes) return json({ error: '삭제할 거래를 찾지 못했어요' }, 404);
         return json({ ok: true });
       }
@@ -620,7 +666,7 @@ export default {
         const month = url.searchParams.get('month');
         if (!isMonth(month)) return json({ error: '월 형식이 올바르지 않아요' }, 400);
         const r = await env.DB.prepare(
-          `UPDATE transactions SET photo_url = NULL WHERE photo_url IS NOT NULL AND date LIKE ?1`
+          `UPDATE transactions SET photo_url = NULL WHERE photo_url IS NOT NULL AND date LIKE ?1 AND deleted_at IS NULL`
         ).bind(month + '-%').run();
         return json({ cleared: r.meta.changes });
       }

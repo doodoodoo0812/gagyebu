@@ -21,10 +21,16 @@ CREATE TABLE transactions (
   memo         TEXT NOT NULL DEFAULT '' CHECK (length(memo) <= 500),
   photo_url    TEXT,
   is_recurring INTEGER NOT NULL DEFAULT 0 CHECK (is_recurring IN (0,1)),
-  user_name    TEXT NOT NULL DEFAULT '' CHECK (length(user_name) <= 40)
+  user_name    TEXT NOT NULL DEFAULT '' CHECK (length(user_name) <= 40),
+  -- 소프트 삭제. NULL이면 정상, 값이 있으면 '휴지통'에 있는 거래(삭제한 시각).
+  -- 삭제를 바로 지우지 않고 이 칸만 찍어, 실수로 지워도 되살릴 수 있게 한다.
+  -- 조회는 전부 deleted_at IS NULL로 거르고, 30일 지난 건 데이터 로드 때 완전삭제한다.
+  deleted_at   TEXT
 );
 
 CREATE INDEX idx_tx_date ON transactions(date);
+-- 휴지통 목록·자동정리(deleted_at 기준)를 위한 인덱스.
+CREATE INDEX idx_tx_deleted ON transactions(deleted_at);
 
 -- 정기 지출 중복 방지.
 -- 앱의 "이미 등록했나?" 검사는 읽고-나서-쓰기라 원자적이지 않다. 부부가 같은 날 동시에

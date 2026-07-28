@@ -701,7 +701,7 @@ body {
 
     <div style="padding:0 4px 8px">
       <input class="form-input" id="tx-search" type="search" inputmode="search"
-             placeholder="🔎 이름·메모·카테고리 검색 (최근 6개월)" oninput="onTxSearch(this.value)">
+             placeholder="🔎 이름·메모·카테고리 검색 (최근 1년)" oninput="onTxSearch(this.value)">
     </div>
 
     <div class="tab-bar" id="category-filter-tabs">
@@ -871,6 +871,16 @@ body {
           <div>
             <div class="settings-item-text">영수증 갤러리</div>
             <div class="settings-item-sub">찍은 영수증 모아보기 · 월별 삭제</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
+      <div class="settings-item" onclick="openTrash()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🗑️</div>
+          <div>
+            <div class="settings-item-text">휴지통</div>
+            <div class="settings-item-sub">지운 거래 되살리기 · 30일 후 자동 삭제</div>
           </div>
         </div>
         <div class="settings-item-right">›</div>
@@ -1054,6 +1064,23 @@ body {
     <img id="receipt-preview-img" style="width:100%;border-radius:8px;max-height:70vh;object-fit:contain">
     <div id="receipt-preview-info" style="color:#fff;font-size:13px;text-align:center;margin-top:10px"></div>
     <button class="btn-secondary" onclick="closeModal('receipt-preview-modal')" style="margin-top:8px;border-color:#444;color:#aaa">닫기</button>
+  </div>
+</div>
+
+<!-- TRASH MODAL -->
+<div class="modal-backdrop" id="trash-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div class="modal-title" style="margin:0">🗑️ 휴지통</div>
+      <div id="trash-count" style="font-size:12px;color:var(--text3)"></div>
+    </div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:12px">지운 거래는 30일간 보관 후 자동으로 완전 삭제돼요.</div>
+    <div id="trash-list"></div>
+    <button class="btn-secondary" id="trash-empty-btn"
+            style="background:rgba(255,80,80,0.1);border-color:var(--expense);color:var(--expense);margin-bottom:8px;display:none"
+            onclick="emptyTrash()">휴지통 비우기 (전체 완전삭제)</button>
+    <button class="btn-secondary" onclick="closeModal('trash-modal')">닫기</button>
   </div>
 </div>
 
@@ -1478,11 +1505,12 @@ async function loadData() {
     transactions = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
     budgets = JSON.parse(localStorage.getItem('budgets_demo') || '[]');
   } else if (authToken) {
-    // 상한은 '다음 달 1일 미만'. 하한은 5개월 전 1일 —
-    // 통계의 '월별 지출 추이'가 6개월을 그리고 전월 비교도 이 배열을 쓰기 때문에 6개월치를 부른다.
+    // 상한은 '다음 달 1일 미만'. 하한은 12개월 전 1일 —
+    // 검색이 최근 1년+를 훑을 수 있게 13개월 창으로 부른다(사진 제외 텍스트라 1년치라야 수백 KB).
+    // 통계의 '월별 지출 추이'는 자체적으로 '최근 6개월' 루프를 돌므로 이 창을 넓혀도 안 깨진다.
     const seq = ++loadSeq;
     try {
-      const r = await api(`/data?from=${monthStrOffset(-5)}-01&to=${getNextMonthStr()}-01&month=${getMonthStr()}`);
+      const r = await api(`/data?from=${monthStrOffset(-12)}-01&to=${getNextMonthStr()}-01&month=${getMonthStr()}`);
       // 그새 더 최근 요청이 시작됐으면(달을 또 넘겼으면) 이 옛 응답은 버린다.
       // 안 그러면 늦게 도착한 이전 달 데이터가 현재 달 화면을 덮어쓴다.
       if (seq !== loadSeq) return;
@@ -1726,7 +1754,7 @@ function renderHistoryPage() {
   });
 
   const countLine = searching
-    ? `<div style="font-size:12px;color:var(--text3);padding:4px 4px 8px">🔎 "${esc(q)}" 검색결과 ${sorted.length}건 · 최근 6개월</div>`
+    ? `<div style="font-size:12px;color:var(--text3);padding:4px 4px 8px">🔎 "${esc(q)}" 검색결과 ${sorted.length}건 · 최근 1년</div>`
     : '';
   const empty = searching
     ? '<div class="empty-state"><div class="empty-icon">🔍</div><p>검색 결과가 없어요</p></div>'
@@ -1736,10 +1764,10 @@ function renderHistoryPage() {
 
 function onTxSearch(v) {
   txSearchQuery = v || '';
-  renderHistoryPage();   // 검색은 로컬(로드된 6개월)에서만 거르므로 서버 재요청 없음
+  renderHistoryPage();   // 검색은 로컬(로드된 최근 1년)에서만 거르므로 서버 재요청 없음
 }
 
-// 달을 넘기거나 목록 탭에 새로 들어올 때 검색어를 비운다(검색은 월과 무관하게 6개월을 훑기 때문에
+// 달을 넘기거나 목록 탭에 새로 들어올 때 검색어를 비운다(검색은 월과 무관하게 최근 1년을 훑기 때문에
 // 검색어가 남아 있으면 월 선택이 먹지 않는 것처럼 보인다).
 function resetTxSearch() {
   txSearchQuery = '';
@@ -2279,11 +2307,18 @@ async function loadDetailPhoto(tx) {
 
 async function deleteCurrentTx() {
   if (!currentEditTx) return;
-  if (!confirm('삭제할까요?')) return;
+  if (!confirm('이 거래를 휴지통으로 보낼까요?\n30일 후 자동으로 완전 삭제돼요.\n그전엔 [설정 › 휴지통]에서 되살릴 수 있어요.')) return;
   if (demoMode) {
+    // 데모도 클라우드와 똑같이 소프트 삭제 — transactions_demo에서 빼서 휴지통 배열로 옮긴다.
     let stored = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
+    const gone = stored.find(t=>t.id===currentEditTx.id);
     stored = stored.filter(t=>t.id!==currentEditTx.id);
     localStorage.setItem('transactions_demo', JSON.stringify(stored));
+    if (gone) {
+      const trash = JSON.parse(localStorage.getItem('transactions_trash_demo') || '[]');
+      trash.unshift({ ...gone, deleted_at: new Date().toISOString() });
+      localStorage.setItem('transactions_trash_demo', JSON.stringify(trash));
+    }
     transactions = stored;
   } else if (authToken) {
     try {
@@ -2299,7 +2334,116 @@ async function deleteCurrentTx() {
   }
   closeModal('detail-modal');
   renderAll();
-  showToast('🗑️ 삭제 완료');
+  showToast('🗑️ 휴지통으로 보냈어요');
+}
+
+// ===== 휴지통 (소프트 삭제된 거래 되살리기 / 완전삭제) =====
+async function openTrash() {
+  openModal('trash-modal');
+  document.getElementById('trash-list').innerHTML =
+    '<div style="text-align:center;color:var(--text3);font-size:13px;padding:20px">불러오는 중…</div>';
+  document.getElementById('trash-empty-btn').style.display = 'none';
+  let items = [];
+  try {
+    if (demoMode) items = JSON.parse(localStorage.getItem('transactions_trash_demo') || '[]');
+    else if (authToken) items = (await api('/trash')).transactions || [];
+  } catch(e) {
+    document.getElementById('trash-list').innerHTML =
+      `<div style="text-align:center;color:var(--expense);font-size:13px;padding:20px">불러오기 실패: ${esc(e.message)}</div>`;
+    return;
+  }
+  renderTrashList(items);
+}
+
+// 삭제 시각(서버는 'YYYY-MM-DD HH:MM:SS' UTC, 데모는 ISO)으로 "며칠 남았는지"를 만든다.
+function deletedAgo(ts) {
+  if (!ts) return '';
+  let s = String(ts);
+  if (!s.includes('T')) s = s.replace(' ', 'T');
+  if (!/[Z+]/.test(s)) s += 'Z';
+  const d = new Date(s);
+  if (isNaN(d)) return '';
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  const left = 30 - days;
+  if (left <= 0) return '곧 완전삭제';
+  if (days <= 0) return `${left}일 후 완전삭제`;
+  return `${days}일 전 삭제 · ${left}일 후 완전삭제`;
+}
+
+function renderTrashList(items) {
+  const list = document.getElementById('trash-list');
+  document.getElementById('trash-count').textContent = items.length ? `${items.length}건` : '';
+  document.getElementById('trash-empty-btn').style.display = items.length ? 'block' : 'none';
+  if (!items.length) {
+    list.innerHTML = '<div style="text-align:center;color:var(--text3);font-size:13px;padding:30px">' +
+      '<div style="font-size:40px;margin-bottom:8px">✨</div>휴지통이 비어 있어요</div>';
+    return;
+  }
+  list.innerHTML = items.map(t => {
+    const cat = [...CATEGORIES.expense, ...CATEGORIES.income].find(c => c.key === t.category);
+    const when = deletedAgo(t.deleted_at);
+    // id는 dataset로만 넘긴다(onclick 문자열에 넣지 않는다 — 코드 전반의 규칙).
+    return `<div class="tx-item" data-id="${esc(t.id)}" style="cursor:default">
+      <div class="tx-icon">${cat?.emoji || '📦'}</div>
+      <div class="tx-info">
+        <div class="tx-name">${esc(t.name)} <span style="color:var(--text3);font-weight:400">${t.type==='expense'?'-':'+'}${fmtMoney(t.amount)}</span></div>
+        <div class="tx-meta">${esc(t.date)} · ${esc(t.category)}${when ? ' · ' + when : ''}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn-secondary" style="padding:6px 10px;font-size:12px;margin:0;width:auto"
+                onclick="restoreTrashTx(this.closest('[data-id]').dataset.id)">되살리기</button>
+        <button class="btn-secondary" style="padding:6px 10px;font-size:12px;margin:0;width:auto;border-color:var(--expense);color:var(--expense)"
+                onclick="purgeTrashTx(this.closest('[data-id]').dataset.id)">완전삭제</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function restoreTrashTx(id) {
+  try {
+    if (demoMode) {
+      const trash = JSON.parse(localStorage.getItem('transactions_trash_demo') || '[]');
+      const row = trash.find(t => t.id === id);
+      localStorage.setItem('transactions_trash_demo', JSON.stringify(trash.filter(t => t.id !== id)));
+      if (row) {
+        const { deleted_at, ...clean } = row;
+        const stored = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
+        stored.push(clean);
+        localStorage.setItem('transactions_demo', JSON.stringify(stored));
+        transactions = stored;
+      }
+    } else if (authToken) {
+      await api('/tx/' + encodeURIComponent(id) + '/restore', { method: 'POST' });
+      await loadData();
+    }
+  } catch(e) { showToast('❌ 복원 실패: ' + e.message); return; }
+  showToast('↩️ 되살렸어요');
+  renderAll();
+  openTrash();   // 목록 갱신
+}
+
+async function purgeTrashTx(id) {
+  if (!confirm('이 거래를 완전히 삭제할까요?\n되돌릴 수 없어요.')) return;
+  try {
+    if (demoMode) {
+      const trash = JSON.parse(localStorage.getItem('transactions_trash_demo') || '[]').filter(t => t.id !== id);
+      localStorage.setItem('transactions_trash_demo', JSON.stringify(trash));
+    } else if (authToken) {
+      await api('/trash/' + encodeURIComponent(id), { method: 'DELETE' });
+    }
+  } catch(e) { showToast('❌ 삭제 실패: ' + e.message); return; }
+  showToast('🗑️ 완전삭제했어요');
+  openTrash();
+}
+
+async function emptyTrash() {
+  if (!confirm('휴지통을 비울까요?\n안의 모든 거래가 완전히 삭제되고 되돌릴 수 없어요.')) return;
+  try {
+    if (demoMode) localStorage.setItem('transactions_trash_demo', '[]');
+    else if (authToken) await api('/trash', { method: 'DELETE' });
+  } catch(e) { showToast('❌ 비우기 실패: ' + e.message); return; }
+  showToast('🗑️ 휴지통을 비웠어요');
+  openTrash();
 }
 
 // ===== BUDGET =====
