@@ -13,8 +13,12 @@ Cloudflare Worker + D1. **운영 주소: https://gagyebu.mandoo0812.workers.dev*
 ```
 npx wrangler dev --port 8790 --local      # 로컬. .dev.vars에 APP_PASSWORD/SESSION_SECRET (git 제외)
 npx wrangler deploy                        # ★ 배포는 이 명령. git push 자동배포 아님(artclass와 다름)
-npx wrangler d1 execute gagyebu --remote --file=schema.sql   # 스키마(운영)
+npx wrangler d1 execute gagyebu --remote --file=schema.sql   # 스키마(새 DB 최초 1회)
 ```
+- **스키마 변경은 `migrations/`의 파일을 순서대로 적용**(운영 DB는 이미 데이터가 있어 schema.sql 통짜 재실행 불가).
+  `--local`로 먼저, 확인 후 `--remote`로. 예: `npx wrangler d1 execute gagyebu --remote --file=migrations/001_soft_delete.sql`.
+  적용 순서는 배포보다 **먼저**(새 워커가 새 컬럼/테이블을 참조하므로). 001=deleted_at(소프트삭제), 002=categories(사용자 카테고리).
+- 로컬 wrangler dev는 백그라운드 `&`로 띄우면 호출 사이에 죽는다 — **서버 기동과 curl 테스트를 한 번의 명령으로 묶을 것**(`nohup … & disown` 후 폴링→테스트).
 - 배포 후 라이브는 `curl`로 배포본 해시=로컬 해시 폴링해 확인. 엣지 캐시로 1~2회는 옛 버전 나올 수 있음.
 - `compatibility_date`는 설치된 wrangler의 로컬 런타임 상한(2026-05-01). 더 뒤로 올리면 `wrangler dev`가 안 뜸.
 
@@ -40,7 +44,10 @@ npx wrangler d1 execute gagyebu --remote --file=schema.sql   # 스키마(운영)
 - 스크린샷 툴은 패널 미표시 시 타임아웃 → JS로 상태를 읽어 검증.
 
 ## 4. 남은 일 (문서·코드에 없으니 여기 적음)
-- **실기기(아이폰) 확인 아직 안 됨** — 전부 브라우저 에뮬레이션으로만 검증. 특히 최근 크게 바꾼 **거래추가 모달**(순서·문자/사진 접기)과 **홈 인사이트** 줄들을 폰에서 확인 필요.
+- **실기기(아이폰) 확인 아직 안 됨** — 전부 브라우저 에뮬레이션/로컬 로그인 curl로만 검증. 특히 최근 추가한
+  **거래 검색**(목록 상단), **휴지통**(설정), **카테고리 관리**(설정), **JSON 백업/복원**(설정), **금액 콤마 입력**을 폰에서 확인 필요.
+- **JSON 복원의 요청 크기** — 사진 많은 백업을 복원하면 POST 본문이 매우 커질 수 있다(수십 MB). 부부 몇 달치는 문제없지만,
+  아주 큰 백업은 나눠 넣거나 서버에서 청크 처리가 필요할 수 있음(아직 대용량 복원은 실측 안 함).
 - **Gemini 실제 인식은 실키로 끝까지 검증 못 함** — 로직·모델 자동감지·404 자가복구·설정 UI는 확인. 키 넣고 영수증 한 장 찍어봐야 품질 확인 가능.
 - **카카오 로그인**은 원하면 재도입. Worker에 `issueToken`이 이미 있어 서버 토큰교환만 붙이면 됨(카카오 콘솔 설정 필요).
 
