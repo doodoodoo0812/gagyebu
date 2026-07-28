@@ -855,6 +855,16 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
+      <div class="settings-item" onclick="openCategoryModal()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🏷️</div>
+          <div>
+            <div class="settings-item-text">카테고리 관리</div>
+            <div class="settings-item-sub">내 카테고리 추가·삭제</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -905,6 +915,27 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
+      <div class="settings-item" onclick="exportBackup()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">💾</div>
+          <div>
+            <div class="settings-item-text">백업 내려받기 (JSON)</div>
+            <div class="settings-item-sub">거래·사진·예산·카테고리 전부 한 파일로</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
+      <div class="settings-item" onclick="triggerImportBackup()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">♻️</div>
+          <div>
+            <div class="settings-item-text">백업 복원 (JSON 불러오기)</div>
+            <div class="settings-item-sub">백업 파일을 현재 데이터에 더하기 (중복은 건너뜀)</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
+      <input type="file" id="backup-file-input" accept="application/json,.json" style="display:none" onchange="importBackup(event)">
     </div>
 
     <div class="settings-section">
@@ -1084,6 +1115,30 @@ body {
   </div>
 </div>
 
+<!-- CATEGORY MANAGER MODAL -->
+<div class="modal-backdrop" id="category-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title" style="margin-bottom:12px">🏷️ 카테고리 관리</div>
+
+    <div style="background:var(--surface2);border-radius:12px;padding:12px;margin-bottom:16px">
+      <div class="tab-bar" style="margin-bottom:10px">
+        <div class="tab-item active" id="cat-type-expense" onclick="setNewCatType('expense')">지출</div>
+        <div class="tab-item" id="cat-type-income" onclick="setNewCatType('income')">수입</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+        <div id="cat-emoji-current" style="font-size:22px;width:42px;height:42px;display:flex;align-items:center;justify-content:center;background:var(--bg2);border-radius:8px;flex-shrink:0">🏷️</div>
+        <input class="form-input" id="cat-name-input" maxlength="20" placeholder="새 카테고리 이름 (예: 경조사)" style="margin:0">
+      </div>
+      <div id="cat-emoji-grid" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px"></div>
+      <button class="btn-primary" onclick="addCategory()" style="margin:0">+ 추가</button>
+    </div>
+
+    <div id="cat-manage-list"></div>
+    <button class="btn-secondary" onclick="closeModal('category-modal')" style="margin-top:4px">닫기</button>
+  </div>
+</div>
+
 <!-- RECURRING MODAL -->
 <div class="modal-backdrop" id="ai-modal">
   <div class="modal">
@@ -1216,7 +1271,8 @@ let charts = {};
 let selectedCategoryFilter = '전체';
 let txSearchQuery = '';   // 거래 검색어. 있으면 이번 달이 아니라 로드된 6개월 전체에서 찾는다.
 
-const CATEGORIES = {
+// 내장 카테고리(앱에 고정). 사용자가 추가한 것은 customCategories에 서버(또는 데모)로부터 불러온다.
+const BUILTIN_CATEGORIES = {
   expense: [
     { key:'식비', emoji:'🍽️' },
     { key:'카페', emoji:'☕' },
@@ -1238,6 +1294,20 @@ const CATEGORIES = {
     { key:'기타수입', emoji:'📥' },
   ]
 };
+let customCategories = [];   // 사용자 추가 카테고리 {id,type,name,emoji}
+// 실사용 카테고리 = 내장 + 사용자. 렌더는 전부 이 CATEGORIES를 읽으므로, rebuild하면 전 화면에 반영된다.
+let CATEGORIES = { expense: [...BUILTIN_CATEGORIES.expense], income: [...BUILTIN_CATEGORIES.income] };
+function rebuildCategories() {
+  const tailKeys = new Set(['기타', '기타수입']);   // '기타/기타수입'은 늘 맨 끝으로
+  const merge = (type) => {
+    const head = BUILTIN_CATEGORIES[type].filter(c => !tailKeys.has(c.key));
+    const tail = BUILTIN_CATEGORIES[type].filter(c => tailKeys.has(c.key));
+    const custom = customCategories.filter(c => c.type === type)
+      .map(c => ({ key: c.name, emoji: c.emoji, id: c.id, custom: true }));
+    return [...head, ...custom, ...tail];
+  };
+  CATEGORIES = { expense: merge('expense'), income: merge('income') };
+}
 
 const THEMES = [
   { key:'navy', name:'네이비 민트', colors:['#0f1628','#4ecdc4'], desc:'차분하고 모던한 느낌' },
@@ -1526,8 +1596,107 @@ async function loadData() {
   }
   await loadRecurring();   // 규칙은 서버에 있으므로 매번 받아온다(배우자가 추가·삭제했을 수 있다)
   await applyRecurring();
+  await loadCategories();   // 사용자 카테고리(내장+커스텀 병합). 실패해도 내장으로 동작.
   renderAll();
   refreshAiStatus();       // 설정 화면의 AI 상태 표시 (실패해도 앱엔 지장 없으므로 await 안 함)
+}
+
+// 사용자 카테고리를 서버(또는 데모 localStorage)에서 불러와 CATEGORIES에 병합한다.
+async function loadCategories() {
+  try {
+    if (demoMode) customCategories = JSON.parse(localStorage.getItem('custom_categories_demo') || '[]');
+    else if (authToken) customCategories = (await api('/categories')).categories || [];
+  } catch (e) { /* 실패해도 내장 카테고리로 동작한다 */ }
+  rebuildCategories();
+  renderCategoryGrids();    // 예산·정기 지출의 카테고리 선택칸을 새 목록으로 갱신
+}
+
+// ===== 카테고리 관리 (사용자 추가/삭제) =====
+let newCatType = 'expense';
+let selectedNewCatEmoji = '🏷️';
+const CAT_EMOJI_PALETTE = ['🏷️','🎉','🎂','💐','🎁','🐶','🐱','🚗','⛽','🏥','💊','🍔','🍜','🍺','☕','👶','🧸','📱','💻','🎮','🏋️','⚽','🎨','📖','✈️','🏨','💵','🏦','🧾','🔧','🪴','🚿','🎓','💡','🩺','🛠️'];
+
+function openCategoryModal() {
+  setNewCatType('expense');
+  document.getElementById('cat-name-input').value = '';
+  selectedNewCatEmoji = '🏷️';
+  renderCatEmojiGrid();
+  renderCatManageList();
+  openModal('category-modal');
+}
+
+function setNewCatType(type) {
+  newCatType = type;
+  document.getElementById('cat-type-expense').classList.toggle('active', type === 'expense');
+  document.getElementById('cat-type-income').classList.toggle('active', type === 'income');
+}
+
+function renderCatEmojiGrid() {
+  document.getElementById('cat-emoji-current').textContent = selectedNewCatEmoji;
+  document.getElementById('cat-emoji-grid').innerHTML = CAT_EMOJI_PALETTE.map(e => `
+    <span onclick="selectNewCatEmoji('${e}')" style="font-size:20px;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;background:${e === selectedNewCatEmoji ? 'var(--accent)' : 'var(--bg2)'}">${e}</span>
+  `).join('');
+}
+function selectNewCatEmoji(e) { selectedNewCatEmoji = e; renderCatEmojiGrid(); }
+
+function renderCatManageList() {
+  const box = document.getElementById('cat-manage-list');
+  const section = (type, label) => {
+    const custom = customCategories.filter(c => c.type === type);
+    const builtinNames = BUILTIN_CATEGORIES[type].map(c => c.emoji + c.key).join(' · ');
+    const items = custom.length ? custom.map(c => `
+      <div class="tx-item" data-id="${esc(c.id)}" style="cursor:default;padding:8px 10px">
+        <div class="tx-icon">${esc(c.emoji)}</div>
+        <div class="tx-info"><div class="tx-name">${esc(c.name)}</div></div>
+        <button class="btn-secondary" style="padding:4px 12px;font-size:12px;margin:0;width:auto;border-color:var(--expense);color:var(--expense)"
+                onclick="deleteCategory(this.closest('[data-id]').dataset.id)">삭제</button>
+      </div>`).join('') : `<div style="font-size:12px;color:var(--text3);padding:6px 2px">추가한 ${label} 카테고리가 없어요</div>`;
+    return `<div style="font-size:12px;color:var(--text2);font-weight:700;margin:12px 2px 6px">${label}</div>
+      ${items}
+      <div style="font-size:11px;color:var(--text3);padding:6px 2px 2px;line-height:1.5">기본: ${esc(builtinNames)}</div>`;
+  };
+  box.innerHTML = section('expense', '지출') + section('income', '수입');
+}
+
+async function addCategory() {
+  const name = document.getElementById('cat-name-input').value.trim();
+  if (!name) { showToast('카테고리 이름을 입력해 주세요'); return; }
+  if (name.length > 20) { showToast('이름이 너무 길어요 (20자 이내)'); return; }
+  // 같은 유형 안에서 내장·커스텀과 중복 방지
+  const taken = [...BUILTIN_CATEGORIES[newCatType].map(c => c.key),
+                 ...customCategories.filter(c => c.type === newCatType).map(c => c.name)];
+  if (taken.includes(name)) { showToast('이미 있는 카테고리예요'); return; }
+  const emoji = selectedNewCatEmoji || '🏷️';
+  try {
+    if (demoMode) {
+      customCategories.push({ id: 'c' + Date.now(), type: newCatType, name, emoji });
+      localStorage.setItem('custom_categories_demo', JSON.stringify(customCategories));
+    } else if (authToken) {
+      customCategories = (await api('/categories', { method: 'POST', body: { type: newCatType, name, emoji } })).categories || [];
+    } else { showToast('❌ 로그인이 필요해요'); return; }
+  } catch (e) { showToast('❌ 추가 실패: ' + e.message); return; }
+  rebuildCategories();
+  renderCategoryGrids();
+  document.getElementById('cat-name-input').value = '';
+  renderCatManageList();
+  showToast(`✅ '${name}' 추가했어요`);
+}
+
+async function deleteCategory(id) {
+  const c = customCategories.find(x => x.id === id);
+  if (!confirm(`'${c ? c.name : '이 카테고리'}'를 삭제할까요?\n이미 이 카테고리로 저장된 거래는 그대로 남아요.`)) return;
+  try {
+    if (demoMode) {
+      customCategories = customCategories.filter(x => x.id !== id);
+      localStorage.setItem('custom_categories_demo', JSON.stringify(customCategories));
+    } else if (authToken) {
+      customCategories = (await api('/categories/' + encodeURIComponent(id), { method: 'DELETE' })).categories || [];
+    }
+  } catch (e) { showToast('❌ 삭제 실패: ' + e.message); return; }
+  rebuildCategories();
+  renderCategoryGrids();
+  renderCatManageList();
+  showToast('🗑️ 삭제했어요');
 }
 
 async function syncData() {
@@ -2080,10 +2249,11 @@ function renderCategoryGrid(type) {
   const cats = CATEGORIES[type] || CATEGORIES.expense;
   const el = document.getElementById('cat-grid');
   if (!el) return;
+  // 카테고리명은 사용자가 자유롭게 넣으므로(따옴표 포함 가능) onclick 문자열이 아니라 dataset으로 넘긴다.
   el.innerHTML = cats.map(c => `
-    <div class="cat-btn ${selectedCategory===c.key?'selected':''}" onclick="selectCategory('${c.key}')">
-      <div class="cat-emoji">${c.emoji}</div>
-      <div class="cat-name">${c.key}</div>
+    <div class="cat-btn ${selectedCategory===c.key?'selected':''}" data-cat="${esc(c.key)}" onclick="selectCategory(this.dataset.cat)">
+      <div class="cat-emoji">${esc(c.emoji)}</div>
+      <div class="cat-name">${esc(c.key)}</div>
     </div>
   `).join('');
 }
@@ -2096,10 +2266,11 @@ function selectCategory(key) {
 
 function renderCategoryGrids() {
   try {
+    const opts = CATEGORIES.expense.map(c=>`<option value="${esc(c.key)}">${esc(c.emoji)} ${esc(c.key)}</option>`).join('');
     const sel = document.getElementById('budget-cat');
-    if (sel) sel.innerHTML = CATEGORIES.expense.map(c=>`<option value="${c.key}">${c.emoji} ${c.key}</option>`).join('');
+    if (sel) sel.innerHTML = opts;
     const rs = document.getElementById('rec-cat');
-    if (rs) rs.innerHTML = CATEGORIES.expense.map(c=>`<option value="${c.key}">${c.emoji} ${c.key}</option>`).join('');
+    if (rs) rs.innerHTML = opts;
   } catch(e) { console.error('renderCategoryGrids error:', e); }
 }
 
@@ -2629,6 +2800,75 @@ function exportExcel(data, filename) {
 
   XLSX.writeFile(wb, `${filename}.xlsx`);
   showToast('📥 Excel 다운로드 완료');
+}
+
+// ===== JSON 백업 / 복원 (사진 포함) =====
+// Excel은 사진을 못 담는다. 영수증까지 통째로 지키려면 이 JSON 백업이 유일한 방법이라 별도로 둔다.
+async function exportBackup() {
+  showToast('⏳ 백업을 준비하는 중…');
+  let data;
+  try {
+    if (demoMode) {
+      data = {
+        version: 1, exported_at: new Date().toISOString(),
+        transactions: JSON.parse(localStorage.getItem('transactions_demo') || '[]'),
+        budgets: JSON.parse(localStorage.getItem('budgets_demo') || '[]'),
+        recurring_rules: recurringItems || [],
+        categories: JSON.parse(localStorage.getItem('custom_categories_demo') || '[]'),
+      };
+    } else if (authToken) {
+      data = await api('/backup');   // 사진(base64)까지 포함 — 응답이 클 수 있다
+    } else { showToast('❌ 로그인이 필요해요'); return; }
+  } catch (e) { showToast('❌ 백업 실패: ' + e.message); return; }
+
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `가계부_백업_${todayLocal()}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  showToast(`💾 백업 완료 (거래 ${(data.transactions || []).length}건)`);
+}
+
+function triggerImportBackup() { document.getElementById('backup-file-input').click(); }
+
+async function importBackup(e) {
+  const file = e.target.files[0];
+  e.target.value = '';   // 같은 파일을 다시 고를 수 있게 비워둔다
+  if (!file) return;
+  let data;
+  try { data = JSON.parse(await file.text()); }
+  catch (err) { showToast('❌ 백업 파일을 읽지 못했어요'); return; }
+
+  const n = Array.isArray(data.transactions) ? data.transactions.length : 0;
+  if (!n && !(data.budgets || []).length && !(data.categories || []).length) {
+    showToast('복원할 내용이 없는 파일이에요'); return;
+  }
+  if (!confirm(`이 백업을 복원할까요?\n거래 ${n}건 등을 지금 데이터에 더합니다.\n같은 항목은 중복 없이 건너뛰어요(덮어쓰지 않음).`)) return;
+
+  showToast('⏳ 복원하는 중…');
+  try {
+    if (demoMode) {
+      const mergeById = (key, incoming) => {
+        const cur = JSON.parse(localStorage.getItem(key) || '[]');
+        const seen = new Set(cur.map(x => x.id));
+        for (const it of (incoming || [])) if (it && it.id && !seen.has(it.id)) { cur.push(it); seen.add(it.id); }
+        localStorage.setItem(key, JSON.stringify(cur));
+      };
+      mergeById('transactions_demo', data.transactions);
+      mergeById('budgets_demo', data.budgets);
+      const curCats = JSON.parse(localStorage.getItem('custom_categories_demo') || '[]');
+      const seenC = new Set(curCats.map(x => x.type + '|' + x.name));
+      for (const c of (data.categories || [])) if (c && c.name && !seenC.has(c.type + '|' + c.name)) { curCats.push(c); seenC.add(c.type + '|' + c.name); }
+      localStorage.setItem('custom_categories_demo', JSON.stringify(curCats));
+      showToast('✅ 복원 완료');
+    } else if (authToken) {
+      const r = await api('/restore', { method: 'POST', body: data });
+      const c = r.counts || {};
+      showToast(`✅ 복원 완료 (거래 +${c.transactions || 0}건${c.skipped ? `, 건너뜀 ${c.skipped}` : ''})`);
+    } else { showToast('❌ 로그인이 필요해요'); return; }
+  } catch (err) { showToast('❌ 복원 실패: ' + err.message); return; }
+  await loadData();
 }
 
 // ===== MISC =====

@@ -671,6 +671,112 @@ export default {
         return json({ cleared: r.meta.changes });
       }
 
+      // ── 카테고리 (사용자 추가) ──
+      //  내장 카테고리는 앱(클라이언트)에 있고, 여기엔 사용자가 추가한 것만 저장한다.
+      //  거래의 category는 문자열로 박혀 있어, 카테고리를 지워도 기존 거래는 그 이름 그대로 남는다
+      //  (앱은 모르는 카테고리를 📦로 안전하게 그린다).
+      if (path === '/api/categories' && request.method === 'GET') {
+        const r = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories ORDER BY type, sort, created_at`).all();
+        return json({ categories: r.results ?? [] });
+      }
+      if (path === '/api/categories' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const type = b?.type;
+        const name = String(b?.name ?? '').trim();
+        const emoji = (String(b?.emoji ?? '').trim() || '🏷️');
+        if (type !== 'income' && type !== 'expense') return json({ error: '수입/지출 구분이 올바르지 않아요' }, 400);
+        if (!name || name.length > 20) return json({ error: '카테고리 이름을 확인해 주세요 (1~20자)' }, 400);
+        if (emoji.length > 8) return json({ error: '이모지를 확인해 주세요' }, 400);
+        try {
+          await env.DB.prepare(`INSERT INTO categories (id, type, name, emoji, sort) VALUES (?1,?2,?3,?4,?5)`)
+            .bind(crypto.randomUUID(), type, name, emoji, Date.now() % 1000000000).run();
+        } catch (e) {
+          if (/UNIQUE/i.test(String(e?.message || e))) return json({ error: '이미 있는 카테고리예요' }, 409);
+          throw e;
+        }
+        const r = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories ORDER BY type, sort, created_at`).all();
+        return json({ categories: r.results ?? [] });
+      }
+      if (path.startsWith('/api/categories/') && request.method === 'DELETE') {
+        const id = decodeURIComponent(path.slice('/api/categories/'.length));
+        const d = await env.DB.prepare(`DELETE FROM categories WHERE id = ?1`).bind(id).run();
+        if (!d.meta.changes) return json({ error: '카테고리를 찾지 못했어요' }, 404);
+        const r = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories ORDER BY type, sort, created_at`).all();
+        return json({ categories: r.results ?? [] });
+      }
+
+      // ── 전체 백업 (사진 포함) ──
+      //  JSON 한 덩어리로 내려준다. 목록 API와 달리 photo_url(base64)까지 포함하므로 응답이 클 수 있다.
+      //  휴지통(deleted_at)은 백업에서 제외 — 복원 때 지운 게 되살아나면 곤란하다.
+      if (path === '/api/backup' && request.method === 'GET') {
+        const tx = await env.DB.prepare(
+          `SELECT id, created_at, date, type, category, name, amount, memo, photo_url, is_recurring, user_name
+           FROM transactions WHERE deleted_at IS NULL ORDER BY date`
+        ).all();
+        const bud = await env.DB.prepare(`SELECT id, month, category, amount FROM budgets`).all();
+        const rec = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules`).all();
+        const cat = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories`).all();
+        return json({
+          version: 1,
+          exported_at: new Date().toISOString(),
+          transactions: tx.results ?? [],
+          budgets: bud.results ?? [],
+          recurring_rules: rec.results ?? [],
+          categories: cat.results ?? [],
+        });
+      }
+
+      // ── 백업 복원 ──
+      //  같은 id는 INSERT OR IGNORE로 건너뛴다 — 같은 파일을 두 번 넣어도 중복이 안 생긴다(추가만, 삭제 없음).
+      //  형식이 어긋난 거래는 cleanTx로 걸러 조용히 건너뛴다(전체가 실패하지 않도록).
+      if (path === '/api/restore' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const counts = { transactions: 0, budgets: 0, recurring_rules: 0, categories: 0, skipped: 0 };
+
+        for (const t of (Array.isArray(b?.transactions) ? b.transactions : [])) {
+          const { tx, err } = cleanTx(t);
+          if (err) { counts.skipped++; continue; }
+          const id = (typeof t.id === 'string' && t.id) ? t.id : crypto.randomUUID();
+          try {
+            const r = await env.DB.prepare(
+              `INSERT OR IGNORE INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)`
+            ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.is_recurring, tx.user_name).run();
+            if (r.meta.changes) counts.transactions++;
+          } catch (e) { counts.skipped++; }
+        }
+        for (const bd of (Array.isArray(b?.budgets) ? b.budgets : [])) {
+          try {
+            const amount = Number(bd?.amount);
+            if (!isMonth(bd?.month) || !Number.isInteger(amount) || amount <= 0 || !bd?.category) continue;
+            const r = await env.DB.prepare(
+              `INSERT OR IGNORE INTO budgets (id, month, category, amount) VALUES (?1,?2,?3,?4)`
+            ).bind(bd.id || crypto.randomUUID(), bd.month, String(bd.category), amount).run();
+            if (r.meta.changes) counts.budgets++;
+          } catch (e) {}
+        }
+        for (const rl of (Array.isArray(b?.recurring_rules) ? b.recurring_rules : [])) {
+          try {
+            const amount = Number(rl?.amount), day = Number(rl?.day);
+            if (!rl?.name || !Number.isInteger(amount) || amount <= 0 || !Number.isInteger(day) || day < 1 || day > 31) continue;
+            const r = await env.DB.prepare(
+              `INSERT OR IGNORE INTO recurring_rules (id, name, amount, category, day) VALUES (?1,?2,?3,?4,?5)`
+            ).bind(rl.id || crypto.randomUUID(), String(rl.name), amount, String(rl.category || '기타'), day).run();
+            if (r.meta.changes) counts.recurring_rules++;
+          } catch (e) {}
+        }
+        for (const c of (Array.isArray(b?.categories) ? b.categories : [])) {
+          try {
+            if ((c?.type !== 'income' && c?.type !== 'expense') || !c?.name || String(c.name).length > 20) continue;
+            const r = await env.DB.prepare(
+              `INSERT OR IGNORE INTO categories (id, type, name, emoji, sort) VALUES (?1,?2,?3,?4,?5)`
+            ).bind(c.id || crypto.randomUUID(), c.type, String(c.name), String(c.emoji || '🏷️').slice(0, 8), Number(c.sort) || 0).run();
+            if (r.meta.changes) counts.categories++;
+          } catch (e) {}
+        }
+        return json({ ok: true, counts });
+      }
+
       return json({ error: '없는 주소예요' }, 404);
     } catch (e) {
       // 실패를 조용히 삼키지 않는다. 앱이 이 메시지를 그대로 사용자에게 보여준다.

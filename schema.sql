@@ -94,3 +94,15 @@ CREATE TABLE login_attempts (
   at INTEGER NOT NULL
 );
 CREATE INDEX idx_login_at ON login_attempts(at);
+
+-- 사용자 카테고리. 내장 카테고리는 앱(클라이언트)에 있고, 여기엔 사용자가 추가한 것만 담는다.
+-- 거래의 category는 문자열이라, 카테고리를 지워도 기존 거래는 그 이름 그대로 남는다(앱이 📦로 그린다).
+CREATE TABLE categories (
+  id         TEXT PRIMARY KEY,
+  type       TEXT NOT NULL CHECK (type IN ('income','expense')),
+  name       TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 20),
+  emoji      TEXT NOT NULL DEFAULT '🏷️' CHECK (length(emoji) <= 8),
+  sort       INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(type, name)
+);
