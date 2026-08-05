@@ -453,6 +453,9 @@ body {
   font-weight: 500;
 }
 .badge.recurring { background: rgba(78,205,196,0.15); color: var(--accent); }
+/* 할부는 '이번 달에도 계속 빠지는 돈'이라 정기와 다른 색으로 눈에 띄게 한다. */
+.badge.installment { background: rgba(255,170,60,0.16); color: #f0a03c; }
+.badge.card { background: var(--bg3); color: var(--text3); }
 
 /* Toast */
 .toast {
@@ -1020,7 +1023,29 @@ body {
 
     <div class="form-group">
       <label class="form-label">금액</label>
-      <input class="form-input amount" id="tx-amount" type="text" inputmode="numeric" placeholder="0" oninput="fmtMoneyInput(this)">
+      <input class="form-input amount" id="tx-amount" type="text" inputmode="numeric" placeholder="0" oninput="fmtMoneyInput(this);updateInstallmentHint()">
+    </div>
+
+    <!-- 카드사·할부: 지출일 때만. 할부면 위 '금액'을 총액으로 보고 매달 나눠 등록한다. -->
+    <div class="form-group" id="card-installment-group">
+      <label class="form-label">카드 / 할부 <span style="color:var(--text3);font-weight:400">(선택)</span></label>
+      <div style="display:flex;gap:8px">
+        <select class="form-select" id="tx-card" style="flex:1">
+          <option value="">카드사 없음</option>
+          <option>신한</option><option>삼성</option><option>현대</option><option>국민</option>
+          <option>롯데</option><option>하나</option><option>우리</option><option>BC</option>
+          <option>농협</option><option>카카오뱅크</option><option>기타</option>
+        </select>
+        <select class="form-select" id="tx-installment" style="flex:1" onchange="updateInstallmentHint()">
+          <option value="1">일시불</option>
+          <option value="2">2개월</option><option value="3">3개월</option><option value="4">4개월</option>
+          <option value="5">5개월</option><option value="6">6개월</option><option value="7">7개월</option>
+          <option value="8">8개월</option><option value="9">9개월</option><option value="10">10개월</option>
+          <option value="11">11개월</option><option value="12">12개월</option>
+          <option value="18">18개월</option><option value="24">24개월</option>
+        </select>
+      </div>
+      <div id="installment-hint" style="font-size:12px;color:var(--accent);margin-top:6px;display:none"></div>
     </div>
 
     <div class="form-group">
@@ -1748,6 +1773,13 @@ function safePhoto(u) {
 }
 // 목록 응답엔 용량 때문에 photo_url을 안 싣고 has_photo만 온다. 데모 모드는 photo_url을 그대로 갖고 있다.
 const hasPhoto = (t) => !!(t.has_photo || t.photo_url);
+// 할부인지 — 그룹 키가 있고 총 개월수가 2 이상일 때만.
+const isInstallment = (t) => !!(t.installment_id && t.installment_months >= 2);
+// '할부 3/6' 배지. 이 달 목록에 왜 이 돈이 또 있는지를 한눈에 알려주는 표시.
+const instBadge = (t) => isInstallment(t)
+  ? ` <span class="badge installment">할부 ${t.installment_seq}/${t.installment_months}</span>` : '';
+// 카드사 배지(있을 때만). 일시불에도 붙는다.
+const cardBadge = (t) => t.card ? ` <span class="badge card">💳 ${esc(t.card)}</span>` : '';
 
 function getMonthTx() {
   const ms = getMonthStr();
@@ -1959,7 +1991,7 @@ function renderTxItems(items) {
       <div class="tx-icon">${cat?.emoji||'📦'}</div>
       <div class="tx-info">
         <div class="tx-name">${esc(t.name)}</div>
-        <div class="tx-meta">${esc(t.category)} ${t.user_name?'· '+esc(t.user_name):''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}</div>
+        <div class="tx-meta">${esc(t.category)} ${t.user_name?'· '+esc(t.user_name):''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}${instBadge(t)}${cardBadge(t)}</div>
       </div>
       <div class="tx-amount ${t.type==='expense'?'expense':'income'}">${t.type==='expense'?'-':'+'}<span style="font-family:var(--font-mono)">${fmtMoney(t.amount)}</span></div>
       ${hasPhoto(t)?'<div class="tx-has-photo">📷</div>':''}
@@ -2231,6 +2263,13 @@ function openAddModal(tx = null, clone = false) {
     document.getElementById('tx-memo').value = '';
     selectedCategory = '';
   }
+  // 카드사·할부 초기화. 수정 모드에선 기존 할부를 새로 만들 수 없으니 할부 선택칸은 숨기고 카드사만 보인다.
+  const isEdit = !!(tx && !clone);
+  document.getElementById('tx-card').value = (tx ? (tx.card || '') : '');
+  const instSel = document.getElementById('tx-installment');
+  instSel.value = '1';
+  instSel.style.display = isEdit ? 'none' : '';
+  updateInstallmentHint();
   renderCategoryGrid(currentTxType);
   renderNameChips();
   openModal('add-modal');
@@ -2242,6 +2281,12 @@ function setType(type) {
   currentTxType = type;
   document.getElementById('btn-expense').className = 'type-btn' + (type==='expense'?' active-expense':'');
   document.getElementById('btn-income').className = 'type-btn' + (type==='income'?' active-income':'');
+  // 카드사·할부는 지출에만. 수입으로 바꾸면 숨기고 할부를 일시불로 되돌린다.
+  const ci = document.getElementById('card-installment-group');
+  if (ci) {
+    ci.style.display = (type === 'expense') ? 'block' : 'none';
+    if (type !== 'expense') { document.getElementById('tx-installment').value = '1'; updateInstallmentHint(); }
+  }
   renderCategoryGrid(type);
 }
 
@@ -2274,6 +2319,53 @@ function renderCategoryGrids() {
   } catch(e) { console.error('renderCategoryGrids error:', e); }
 }
 
+// 거래추가 모달의 할부 힌트 — 할부면 '금액'이 총액임을 알리고 월 납입액을 미리 보여준다.
+function updateInstallmentHint() {
+  const hintEl = document.getElementById('installment-hint');
+  const sel = document.getElementById('tx-installment');
+  if (!hintEl || !sel) return;
+  const months = parseInt(sel.value, 10) || 1;
+  const amount = amountDigits('tx-amount') || 0;
+  if (months < 2) { hintEl.style.display = 'none'; return; }
+  hintEl.style.display = 'block';
+  if (amount > 0) {
+    const base = Math.floor(amount / months), rem = amount - base * months;
+    hintEl.textContent = `💳 무이자 ${months}개월 · 월 ${fmtMoney(base)}${rem ? ` (첫 달 ${fmtMoney(base + rem)})` : ''} — 위 금액은 총액이에요`;
+  } else {
+    hintEl.textContent = `💳 무이자 ${months}개월 — 위 '금액'칸에 총액을 넣으세요`;
+  }
+}
+
+// 날짜에 add개월 더하되 없는 날은 말일로(1/31 +1 → 2/28). 데모 할부 회차 날짜용(워커 addMonthsClamp와 동일).
+function addMonthsClampClient(dateStr, add) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const total = (m - 1) + add;
+  const ny = y + Math.floor(total / 12);
+  const nm = ((total % 12) + 12) % 12;
+  const lastDay = new Date(ny, nm + 1, 0).getDate();
+  const nd = Math.min(d, lastDay);
+  return `${ny}-${String(nm + 1).padStart(2, '0')}-${String(nd).padStart(2, '0')}`;
+}
+
+// 데모 모드 무이자 할부 — 클라우드와 동일하게 N개월치를 같은 installment_id로 로컬 생성.
+function addDemoInstallment(p) {
+  const stored = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
+  const base = Math.floor(p.amount / p.months), rem = p.amount - base * p.months;
+  const gid = 'inst_' + Date.now();
+  for (let k = 1; k <= p.months; k++) {
+    stored.unshift({
+      id: 'local_' + Date.now() + '_' + k,
+      date: addMonthsClampClient(p.date, k - 1),
+      type: 'expense', category: p.category, name: p.name,
+      amount: base + (k === 1 ? rem : 0), memo: p.memo || '',
+      photo_url: null, is_recurring: false, user_name: p.user_name || '',
+      card: p.card || null, installment_id: gid, installment_seq: k, installment_months: p.months,
+    });
+  }
+  localStorage.setItem('transactions_demo', JSON.stringify(stored));
+  transactions = stored;
+}
+
 async function saveTransaction() {
   const amount = amountDigits('tx-amount');
   const date = document.getElementById('tx-date').value;
@@ -2283,6 +2375,24 @@ async function saveTransaction() {
   // 항목명을 비우면 카테고리명으로 저장한다. 카페·마트처럼 카테고리가 곧 이름인 소액 지출은
   // 매번 이름을 치지 않아도 되게 — 하루에 가장 많이 반복하는 입력의 타이핑 한 번을 없앤다.
   const name = document.getElementById('tx-name').value.trim() || selectedCategory;
+  const card = document.getElementById('tx-card').value || null;
+  const months = parseInt(document.getElementById('tx-installment').value, 10) || 1;
+
+  // ── 무이자 할부: 새 지출 등록 때만(수정 아님). '금액'을 총액으로 보고 N개월치를 만든다. ──
+  if (months >= 2 && currentTxType === 'expense' && !currentEditTx) {
+    if (amount < months) { showToast('할부 총액이 개월수보다 커야 해요'); return; }
+    const payload = { date, card, category: selectedCategory, name, amount, months, memo, user_name: localStorage.getItem('userName') || '' };
+    try {
+      if (demoMode) addDemoInstallment(payload);
+      else if (authToken) { await api('/installment', { method: 'POST', body: payload }); await loadData(); }
+      else { showToast('❌ 저장할 곳이 없어요. 로그인해 주세요'); return; }
+    } catch (e) { showToast('❌ 할부 등록 실패: ' + e.message); return; }
+    closeModal('add-modal');
+    renderAll();
+    const base = Math.floor(amount / months), rem = amount - base * months;
+    showToast(`✅ 할부 등록 — 월 ${fmtMoney(base)}${rem ? ` (첫 달 ${fmtMoney(base + rem)})` : ''} × ${months}개월`);
+    return;
+  }
 
   // 사진은 잘라서 저장하던 것을(그래서 전부 못 쓰게 됐다) 통째로 저장한다.
   // 수정 시 새 사진을 안 고르면 기존 사진을 유지해야 한다 — 예전엔 수정할 때마다 사진이 날아갔다.
@@ -2290,7 +2400,7 @@ async function saveTransaction() {
 
   const tx = {
     date, type: currentTxType, category: selectedCategory,
-    name, amount, memo, photo_url: photoUrl,
+    name, amount, memo, photo_url: photoUrl, card,
     is_recurring: false, user_name: localStorage.getItem('userName') || ''
   };
 
@@ -2415,7 +2525,7 @@ async function analyzeReceiptWithAI(base64) {
     });
     let filled = [];
     if (r.name)   { document.getElementById('tx-name').value = r.name; filled.push('가게명'); }
-    if (r.amount) { setMoneyInput('tx-amount', r.amount); filled.push('금액'); }
+    if (r.amount) { setMoneyInput('tx-amount', r.amount); updateInstallmentHint(); filled.push('금액'); }
     if (r.category) {
       const all = [...CATEGORIES.expense, ...CATEGORIES.income].map(c => c.key);
       if (all.includes(r.category)) {
@@ -2446,14 +2556,63 @@ function openDetail(id) {
       <div style="font-size:20px;font-weight:700;color:var(--text)">${esc(tx.name)}</div>
       <div style="font-family:var(--font-mono);font-size:28px;font-weight:700;color:var(--${tx.type==='expense'?'expense':'income'});margin:8px 0">${tx.type==='expense'?'-':'+'} ${fmtMoney(tx.amount)}</div>
       <div style="font-size:12px;color:var(--text3)">${esc(tx.date)} · ${esc(tx.category)} ${tx.user_name?'· '+esc(tx.user_name):''}</div>
+      <div style="margin-top:6px">${instBadge(tx)}${cardBadge(tx)}</div>
     </div>
+    ${instCard(tx)}
     ${tx.memo?`<div class="card" style="margin-bottom:12px"><div style="font-size:12px;color:var(--text2)">📝 ${esc(tx.memo)}</div></div>`:''}
     <div id="detail-photo">${hasPhoto(tx)?'<div class="card" style="margin-bottom:12px;text-align:center;color:var(--text3);font-size:13px">📷 사진 불러오는 중…</div>':''}</div>
     <button class="btn-secondary" onclick="closeModal('detail-modal');openAddModal(currentEditTx, true)" style="margin-bottom:8px">🔁 같은 걸로 오늘 추가</button>
     <button class="btn-secondary" onclick="closeModal('detail-modal');openAddModal(currentEditTx)" style="margin-bottom:8px">✏️ 수정</button>
+    ${isInstallment(tx)?`<button class="btn-secondary" style="margin-bottom:8px;border-color:var(--expense);color:var(--expense)" onclick="cancelInstallment()">💳 이 할부 전체 취소 (남은 회차까지)</button>`:''}
   `;
   openModal('detail-modal');
   if (hasPhoto(tx)) loadDetailPhoto(tx);
+}
+
+// 상세 화면의 할부 요약 카드 — "몇 번째 회차인지, 얼마나 남았는지"를 그 자리에서 알려준다.
+function instCard(t) {
+  if (!isInstallment(t)) return '';
+  const group = transactions.filter(x => x.installment_id === t.installment_id);
+  // 로드된 창(13개월) 밖의 회차는 목록에 없을 수 있다. 전부 있을 때만 '총액'을 단정한다.
+  const complete = group.length === t.installment_months;
+  const total = group.reduce((s, x) => s + x.amount, 0);
+  const remainCount = Math.max(0, t.installment_months - t.installment_seq);
+  // 첫 회차만 나머지를 흡수하므로 2회차 이후는 금액이 모두 같다. 그 균등액으로 남은 금액을 센다.
+  const evenAmt = group.find(x => x.installment_seq >= 2)?.amount ?? t.amount;
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="font-size:12px;color:var(--text2);line-height:1.7">
+      💳 무이자 <b>${t.installment_months}개월</b> 할부 중 <b>${t.installment_seq}번째</b>${t.card ? ` · ${esc(t.card)}` : ''}<br>
+      ${complete ? `총액 <b>${fmtMoney(total)}</b> · ` : ''}이 달 <b>${fmtMoney(t.amount)}</b><br>
+      ${remainCount > 0
+        ? `<span style="color:var(--expense)">앞으로 ${remainCount}번 더 · 약 ${fmtMoney(remainCount * evenAmt)} 남음</span>`
+        : `<span style="color:var(--income)">✅ 이번이 마지막 회차예요</span>`}
+    </div>
+  </div>`;
+}
+
+// 할부 전체 취소 — 남은 회차까지 한 번에 휴지통으로. (되살리려면 휴지통에서 각 회차를 복원)
+async function cancelInstallment() {
+  const t = currentEditTx;
+  if (!t || !isInstallment(t)) return;
+  const remainCount = Math.max(0, t.installment_months - t.installment_seq);
+  if (!confirm(`'${t.name}' 할부를 전체 취소할까요?\n이미 지난 회차를 포함해 ${t.installment_months}건(남은 ${remainCount}건)이 휴지통으로 갑니다.\n30일 안에는 휴지통에서 되살릴 수 있어요.`)) return;
+  try {
+    if (demoMode) {
+      const stored = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
+      const gone = stored.filter(x => x.installment_id === t.installment_id);
+      localStorage.setItem('transactions_demo', JSON.stringify(stored.filter(x => x.installment_id !== t.installment_id)));
+      const trash = JSON.parse(localStorage.getItem('transactions_trash_demo') || '[]');
+      gone.forEach(g => trash.unshift({ ...g, deleted_at: new Date().toISOString() }));
+      localStorage.setItem('transactions_trash_demo', JSON.stringify(trash));
+      transactions = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
+    } else if (authToken) {
+      await api('/installment/' + encodeURIComponent(t.installment_id), { method: 'DELETE' });
+      await loadData();
+    } else { showToast('❌ 로그인이 필요해요'); return; }
+  } catch (e) { showToast('❌ 취소 실패: ' + e.message); return; }
+  closeModal('detail-modal');
+  renderAll();
+  showToast('💳 할부를 전체 취소했어요');
 }
 
 // 목록엔 사진이 실려오지 않으므로(용량) 상세를 열 때 그 한 장만 받아온다.
@@ -2558,7 +2717,7 @@ function renderTrashList(items) {
       <div class="tx-icon">${cat?.emoji || '📦'}</div>
       <div class="tx-info">
         <div class="tx-name">${esc(t.name)} <span style="color:var(--text3);font-weight:400">${t.type==='expense'?'-':'+'}${fmtMoney(t.amount)}</span></div>
-        <div class="tx-meta">${esc(t.date)} · ${esc(t.category)}${when ? ' · ' + when : ''}</div>
+        <div class="tx-meta">${esc(t.date)} · ${esc(t.category)}${when ? ' · ' + when : ''}${instBadge(t)}</div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
         <button class="btn-secondary" style="padding:6px 10px;font-size:12px;margin:0;width:auto"
@@ -2782,7 +2941,10 @@ function exportExcel(data, filename) {
   const rows = data.map(t => ({
     '날짜': t.date, '유형': t.type==='expense'?'지출':'수입',
     '카테고리': t.category, '항목': t.name,
-    '금액': t.amount, '메모': t.memo||'', '작성자': t.user_name||''
+    '금액': t.amount, '메모': t.memo||'', '작성자': t.user_name||'',
+    '카드': t.card||'',
+    // 할부는 '3/6'처럼 회차를 남긴다. 엑셀에서도 이 달 금액이 왜 이건지 알 수 있게.
+    '할부': isInstallment(t) ? `${t.installment_seq}/${t.installment_months}` : ''
   }));
   if (typeof XLSX === 'undefined') { showToast('잠시 후 다시 시도해 주세요'); return; }
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -3039,13 +3201,23 @@ function parseSmsText(text) {
     const valid = [...CATEGORIES.expense, ...CATEGORIES.income].map(c => c.key);
     if (valid.includes(result.category)) selectedCategory = result.category;
   }
+  // 카드사·할부도 문자에서 잡아 채운다. setType 뒤에 둬야 한다(수입으로 바뀌면 할부가 일시불로 초기화되므로).
+  // 한국 카드 승인 문자의 할부 금액은 총 결제금액이라, 그대로 '총액'으로 넣으면 맞다.
+  const cardSel = document.getElementById('tx-card');
+  if (result.card && [...cardSel.options].some(o => o.value === result.card)) cardSel.value = result.card;
+  const instSel = document.getElementById('tx-installment');
+  if (result.months >= 2 && result.type !== 'income' &&
+      [...instSel.options].some(o => o.value === String(result.months))) {
+    instSel.value = String(result.months);
+  }
+  updateInstallmentHint();
   renderCategoryGrid(currentTxType);
 
   resultEl.style.display = 'block';
   resultEl.innerHTML = `
     <div class="sms-result-badge">✨ 자동 인식됨</div>
     <div style="font-size:11px;color:var(--text3);margin-top:4px">
-      ${result.type === 'income' ? '수입' : '지출'} · ${esc(result.name)} · ${fmtMoney(result.amount)} · ${esc(result.date)}<br>
+      ${result.type === 'income' ? '수입' : '지출'} · ${esc(result.name)} · ${fmtMoney(result.amount)} · ${esc(result.date)}${result.card ? ` · ${esc(result.card)}` : ''}${result.months >= 2 ? ` · <b style="color:var(--accent)">${result.months}개월 할부</b>` : ''}<br>
       확인 후 저장하세요!
     </div>
   `;
@@ -3142,7 +3314,28 @@ function extractPaymentInfo(text) {
   }
   if (!category) category = isIncome ? '기타수입' : '기타';
 
-  return { amount, name: name || (isIncome ? '입금' : '결제'), date, category, type: isIncome ? 'income' : 'expense' };
+  // ===== 카드사 =====
+  // 카드 문자 앞머리의 '신한카드(1234)' 같은 발신자에서 카드사만 뽑는다(앱의 카드사 목록 이름으로 정규화).
+  let card = '';
+  const cardM = raw.match(/(신한|삼성|현대|국민|KB국민|KB|롯데|하나|우리|농협|NH|BC|비씨|카카오뱅크|카카오)\s*(?:체크)?카드/);
+  if (cardM) {
+    const norm = { 'KB': '국민', 'KB국민': '국민', 'NH': '농협', '비씨': 'BC', '카카오': '카카오뱅크' };
+    card = norm[cardM[1]] || cardM[1];
+  }
+
+  // ===== 할부 개월수 =====
+  // '6개월 할부' / '할부 6개월' / '6개월' + 할부 문구. 일시불이면 0.
+  let months = 0;
+  if (/할부/.test(raw) && !/일시불/.test(raw)) {
+    const mm2 = raw.match(/(\d{1,2})\s*개월/);
+    if (mm2) {
+      const v = parseInt(mm2[1], 10);
+      if (v >= 2 && v <= 24) months = v;
+    }
+  }
+
+  return { amount, name: name || (isIncome ? '입금' : '결제'), date, category,
+           type: isIncome ? 'income' : 'expense', card, months };
 }
 
 function smsDateWithYear(mm, dd) {

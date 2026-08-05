@@ -19,6 +19,9 @@ npx wrangler d1 execute gagyebu --remote --file=schema.sql   # 스키마(새 DB 
   `--local`로 먼저, 확인 후 `--remote`로. 예: `npx wrangler d1 execute gagyebu --remote --file=migrations/001_soft_delete.sql`.
   적용 순서는 배포보다 **먼저**(새 워커가 새 컬럼/테이블을 참조하므로). 001=deleted_at(소프트삭제), 002=categories(사용자 카테고리).
 - 로컬 wrangler dev는 백그라운드 `&`로 띄우면 호출 사이에 죽는다 — **서버 기동과 curl 테스트를 한 번의 명령으로 묶을 것**(`nohup … & disown` 후 폴링→테스트).
+- **Git Bash에서 `curl -d '{"name":"한글"}'` 처럼 한글을 인라인 인자로 넘기면 전송 전에 깨진다**(DB엔 U+FFFD가 저장된다).
+  앱 버그로 오해하기 쉬우니, 한글이 든 요청은 **UTF-8 파일로 저장해 `--data-binary @파일`로 보낼 것**.
+  (검증 완료: 파일로 보내면 워커+D1 왕복 후 코드포인트까지 동일. 앱 경로는 정상이다.)
 - 배포 후 라이브는 `curl`로 배포본 해시=로컬 해시 폴링해 확인. 엣지 캐시로 1~2회는 옛 버전 나올 수 있음.
 - `compatibility_date`는 설치된 wrangler의 로컬 런타임 상한(2026-05-01). 더 뒤로 올리면 `wrangler dev`가 안 뜸.
 

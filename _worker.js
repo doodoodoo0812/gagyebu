@@ -111,6 +111,7 @@ function cleanTx(b) {
       photo_url: b.photo_url ?? null,
       is_recurring: b.is_recurring ? 1 : 0,
       user_name: String(b.user_name ?? '').slice(0, 40),
+      card: b.card ? String(b.card).slice(0, 20) : null,   // 카드사(선택). 일시불에도 기록 가능.
       // 수정 시 photo_url 키 자체가 없으면 기존 사진을 건드리지 않는다.
       // 목록 응답에 photo_url이 빠져 있어서 앱이 되돌려줄 값을 갖고 있지 않기 때문 —
       // 이걸 구분하지 않으면 거래를 수정할 때마다 첨부한 영수증이 지워진다.
@@ -123,7 +124,20 @@ function cleanTx(b) {
 // 6개월치를 그대로 실어 보내면 응답이 수십 MB가 되어 Worker 메모리와 응답 한도를 넘긴다.
 // 목록엔 "사진이 있냐"만 담고(has_photo), 실제 이미지는 볼 때 /api/tx/:id/photo 로 따로 가져온다.
 const TX_COLS = `id, created_at, date, type, category, name, amount, memo, is_recurring, user_name,
+                 card, installment_id, installment_seq, installment_months,
                  (photo_url IS NOT NULL) AS has_photo`;
+
+// 날짜에 add개월을 더하되 그 달에 없는 날은 말일로 맞춘다(1/31 +1개월 → 2/28). 할부 회차 날짜 계산용.
+// UTC로 계산해 타임존 영향 없음.
+function addMonthsClamp(dateStr, add) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const total = (m - 1) + add;
+  const ny = y + Math.floor(total / 12);
+  const nm = ((total % 12) + 12) % 12;                       // 0-based month
+  const lastDay = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+  const nd = Math.min(d, lastDay);
+  return `${ny}-${String(nm + 1).padStart(2, '0')}-${String(nd).padStart(2, '0')}`;
+}
 
 // ───────── 설정 저장소 (app_settings) ─────────
 async function getSetting(env, key) {
@@ -363,11 +377,43 @@ export default {
         }
 
         await env.DB.prepare(
-          `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,?9)`
-        ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.user_name).run();
+          `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name,card)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,?9,?10)`
+        ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.user_name, tx.card).run();
         const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(id).first();
         return json({ tx: row });
+      }
+
+      // ── 무이자 할부 등록 ──
+      //  N개월치 거래를 각 달에 미리 만들어 같은 installment_id로 묶는다. 그러면 매달 그 달 목록/통계/예산에
+      //  자동으로 뜨고(다음 달에도 계속 표시), N개월 지나면 더 안 생긴다. 취소는 그룹을 한 번에.
+      //  batch라 N건이 모두 커밋되거나 모두 안 된다(중간에 몇 건만 남는 일 없음).
+      if (path === '/api/installment' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const total = Number(b?.amount), months = Number(b?.months);
+        if (!isDate(b?.date)) return json({ error: '날짜 형식이 올바르지 않아요' }, 400);
+        if (!b?.category || String(b.category).length > 40) return json({ error: '카테고리를 확인해 주세요' }, 400);
+        if (!b?.name || String(b.name).length > 100) return json({ error: '항목명을 확인해 주세요' }, 400);
+        if (!Number.isInteger(months) || months < 2 || months > 24) return json({ error: '할부 개월수는 2~24 사이여야 해요' }, 400);
+        if (!Number.isInteger(total) || total < months) return json({ error: '할부 총액이 개월수보다 커야 해요(월 1원 이상)' }, 400);
+        if (total >= 100000000000) return json({ error: '금액이 너무 커요' }, 400);
+        const card = b.card ? String(b.card).slice(0, 20) : null;
+        const memo = String(b.memo ?? '').slice(0, 500);
+        const user_name = String(b.user_name ?? '').slice(0, 40);
+        const base = Math.floor(total / months);
+        const rem = total - base * months;           // 첫 회차가 나머지를 흡수 → 합계가 정확히 total
+        const groupId = crypto.randomUUID();
+        const stmts = [];
+        for (let k = 1; k <= months; k++) {
+          const amt = base + (k === 1 ? rem : 0);
+          const date = addMonthsClamp(b.date, k - 1);
+          stmts.push(env.DB.prepare(
+            `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name,card,installment_id,installment_seq,installment_months)
+             VALUES (?1,?2,'expense',?3,?4,?5,?6,NULL,0,?7,?8,?9,?10,?11)`
+          ).bind(crypto.randomUUID(), date, String(b.category), String(b.name), amt, memo, user_name, card, groupId, k, months));
+        }
+        await env.DB.batch(stmts);
+        return json({ ok: true, installment_id: groupId, months, monthly_first: base + rem, monthly_rest: base });
       }
 
       // ── AI 설정 (앱 설정 화면에서 키 입력) ──
@@ -522,6 +568,16 @@ export default {
         return json({ ok: true });
       }
 
+      // ── 할부 전체 취소 (그룹 소프트삭제) ── 남은 회차까지 한 번에 휴지통으로.
+      if (path.startsWith('/api/installment/') && request.method === 'DELETE') {
+        const gid = decodeURIComponent(path.slice('/api/installment/'.length));
+        const r = await env.DB.prepare(
+          `UPDATE transactions SET deleted_at = datetime('now') WHERE installment_id = ?1 AND deleted_at IS NULL`
+        ).bind(gid).run();
+        if (!r.meta.changes) return json({ error: '취소할 할부를 찾지 못했어요' }, 404);
+        return json({ ok: true, cancelled: r.meta.changes });
+      }
+
       // ── 휴지통에서 복원 ──
       //  /api/tx/:id/restore 는 아래 txId(수정/삭제) 파싱보다 먼저 처리해야 한다
       //  (안 그러면 id가 'xxx/restore'로 잡힌다).
@@ -544,10 +600,10 @@ export default {
         // 휴지통에 있는 건 수정 대상이 아니다(deleted_at IS NULL).
         const r = await env.DB.prepare(
           `UPDATE transactions SET date=?1, type=?2, category=?3, name=?4, amount=?5, memo=?6, user_name=?7,
-                  photo_url = CASE WHEN ?8 = 1 THEN ?9 ELSE photo_url END
+                  photo_url = CASE WHEN ?8 = 1 THEN ?9 ELSE photo_url END, card=?11
            WHERE id = ?10 AND deleted_at IS NULL`
         ).bind(tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.user_name,
-               tx._setPhoto, tx.photo_url, txId).run();
+               tx._setPhoto, tx.photo_url, txId, tx.card).run();
         if (!r.meta.changes) return json({ error: '수정할 거래를 찾지 못했어요' }, 404);
         const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(txId).first();
         return json({ tx: row });
@@ -710,7 +766,8 @@ export default {
       //  휴지통(deleted_at)은 백업에서 제외 — 복원 때 지운 게 되살아나면 곤란하다.
       if (path === '/api/backup' && request.method === 'GET') {
         const tx = await env.DB.prepare(
-          `SELECT id, created_at, date, type, category, name, amount, memo, photo_url, is_recurring, user_name
+          `SELECT id, created_at, date, type, category, name, amount, memo, photo_url, is_recurring, user_name,
+                  card, installment_id, installment_seq, installment_months
            FROM transactions WHERE deleted_at IS NULL ORDER BY date`
         ).all();
         const bud = await env.DB.prepare(`SELECT id, month, category, amount FROM budgets`).all();
@@ -737,11 +794,14 @@ export default {
           const { tx, err } = cleanTx(t);
           if (err) { counts.skipped++; continue; }
           const id = (typeof t.id === 'string' && t.id) ? t.id : crypto.randomUUID();
+          const instId  = typeof t.installment_id === 'string' ? t.installment_id : null;
+          const instSeq = Number.isInteger(t.installment_seq) ? t.installment_seq : null;
+          const instN   = Number.isInteger(t.installment_months) ? t.installment_months : null;
           try {
             const r = await env.DB.prepare(
-              `INSERT OR IGNORE INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)`
-            ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.is_recurring, tx.user_name).run();
+              `INSERT OR IGNORE INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name,card,installment_id,installment_seq,installment_months)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)`
+            ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.is_recurring, tx.user_name, tx.card, instId, instSeq, instN).run();
             if (r.meta.changes) counts.transactions++;
           } catch (e) { counts.skipped++; }
         }

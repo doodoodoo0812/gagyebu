@@ -25,12 +25,20 @@ CREATE TABLE transactions (
   -- 소프트 삭제. NULL이면 정상, 값이 있으면 '휴지통'에 있는 거래(삭제한 시각).
   -- 삭제를 바로 지우지 않고 이 칸만 찍어, 실수로 지워도 되살릴 수 있게 한다.
   -- 조회는 전부 deleted_at IS NULL로 거르고, 30일 지난 건 데이터 로드 때 완전삭제한다.
-  deleted_at   TEXT
+  deleted_at   TEXT,
+  -- 카드사(선택). 일시불에도 기록 가능.
+  card         TEXT,
+  -- 무이자 할부. 등록 때 N개월치를 각 달에 미리 만들고 같은 installment_id로 묶는다(한 번에 취소).
+  installment_id     TEXT,      -- 그룹 키. NULL이면 할부 아님
+  installment_seq    INTEGER,   -- 이 달이 몇 번째 회차인지(1-based)
+  installment_months INTEGER    -- 총 개월수 N. 화면엔 '할부 seq/months'
 );
 
 CREATE INDEX idx_tx_date ON transactions(date);
 -- 휴지통 목록·자동정리(deleted_at 기준)를 위한 인덱스.
 CREATE INDEX idx_tx_deleted ON transactions(deleted_at);
+-- 할부 그룹 조회(한 번에 취소)를 위한 인덱스.
+CREATE INDEX idx_tx_installment ON transactions(installment_id);
 
 -- 정기 지출 중복 방지.
 -- 앱의 "이미 등록했나?" 검사는 읽고-나서-쓰기라 원자적이지 않다. 부부가 같은 날 동시에
