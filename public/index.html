@@ -3844,7 +3844,10 @@ function openMonthlyReport() {
     }).join('')}
 
     ${Object.keys(personTotals).length > 1 ? `
-    <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin:12px 0 8px">👫 인별 지출</div>
+    <!-- user_name은 '돈을 쓴 사람'이 아니라 '앱에 기록한 사람'이다(배우자 결제를 대신 적을 수 있다).
+         '인별 지출'이라고 쓰면 지출 책임처럼 읽혀 사실과 다른 화면이 되므로 기준을 밝힌다. -->
+    <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin:12px 0 4px">👫 기록한 사람별</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">쓴 사람이 아니라 앱에 입력한 사람 기준이에요</div>
     ${Object.entries(personTotals).map(([name,amt]) => `
       <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px">
         <span style="font-size:13px;color:var(--text)">${esc(name)}</span>
