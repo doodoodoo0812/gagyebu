@@ -12,8 +12,8 @@
      흰 글자 × 흰 배경이 되어 시계·배터리가 사라진 것처럼 보였다. default로 두면 iOS가 알아서 고른다. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="가계부">
-<!-- manifest의 theme_color/background_color와 같은 값이어야 한다. 어긋나면 앱 실행 시 색이 한 번 튄다. -->
-<meta name="theme-color" content="#0f1628">
+<!-- 기본 테마(크림)의 배경색. JS 로드 후 syncThemeColor()가 실제 테마에 맞춰 갱신한다. -->
+<meta name="theme-color" content="#f6f2e9">
 <link rel="manifest" href="/manifest.json">
 <!-- 아이폰 홈 화면 아이콘. 이 파일이 없으면(예전엔 404였다) iOS가 아이콘 자리에
      페이지 스크린샷을 박아넣는다. iOS는 manifest의 icons가 아니라 이걸 본다. -->
@@ -133,6 +133,25 @@
   --expense: #c0392b;
   --warning: #e67e22;
   --card-glow: 0 0 30px rgba(220,80,120,0.06);
+}
+
+/* Theme 6: Cream (기본) — 따뜻한 미색 바탕, 눈이 편하게. 포인트는 차분한 인디고(빨강 지출·초록 수입과 안 겹침) */
+[data-theme="cream"] {
+  --bg: #f6f2e9;
+  --bg2: #efe9db;
+  --bg3: #e6dcc8;
+  --surface: #fffdf8;
+  --surface2: #f1ebdd;
+  --border: rgba(110,92,60,0.15);
+  --accent: #4c63b6;
+  --accent2: #8a99d6;
+  --text: #2d2a23;
+  --text2: #6a6153;
+  --text3: #8b8171;
+  --income: #1f8f5c;
+  --expense: #cf3f38;
+  --warning: #cf8a00;
+  --card-glow: 0 0 24px rgba(76,99,182,0.05);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -384,6 +403,15 @@ body {
 /* 문자/영수증 빠른입력 버튼이 열려 있을 때 강조 */
 .btn-secondary.active { border-color: var(--accent); color: var(--accent); }
 
+/* 빠른입력(문자·영수증) — '도구' 느낌. 점선 테두리 + 흐린 배경으로 아래 지출/수입 선택과 확연히 구분. */
+.quick-btn {
+  flex: 1; padding: 9px; border-radius: var(--radius-sm);
+  background: var(--surface2); border: 1px dashed var(--border);
+  color: var(--text2); font-size: 12px; font-weight: 500;
+  cursor: pointer; font-family: var(--font-main); transition: all var(--transition);
+}
+.quick-btn.active { border-style: solid; border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+
 /* ===== CHARTS ===== */
 .chart-wrap { position: relative; height: 200px; margin: 8px 0; }
 .chart-wrap-lg { position: relative; height: 240px; margin: 8px 0; }
@@ -608,7 +636,7 @@ body {
 }
 </style>
 </head>
-<body data-theme="navy">
+<body data-theme="cream">
 
 <div id="login-screen" class="login-screen">
   <div class="login-logo">💰</div>
@@ -980,10 +1008,11 @@ body {
     <div class="modal-handle"></div>
     <div class="modal-title" id="add-modal-title">거래 추가</div>
 
-    <!-- 손입력이 기본. 문자·사진은 버튼 뒤로 접어 매번 스크롤로 지나치지 않게 한다. -->
-    <div style="display:flex;gap:8px;margin-bottom:12px">
-      <button type="button" class="btn-secondary" id="quick-sms-btn" onclick="toggleQuickInput('sms')" style="flex:1;margin:0;padding:10px;font-size:13px">💬 문자 붙여넣기</button>
-      <button type="button" class="btn-secondary" id="quick-photo-btn" onclick="toggleQuickInput('photo')" style="flex:1;margin:0;padding:10px;font-size:13px">📷 영수증 사진</button>
+    <!-- 손입력이 기본. 문자·사진은 '자동 입력 도구'라 아래 지출/수입 선택과 확연히 다른 모양(점선 칩)으로 둔다. -->
+    <div style="font-size:11px;color:var(--text3);margin-bottom:6px">빠른 입력 (선택)</div>
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <button type="button" class="quick-btn" id="quick-sms-btn" onclick="toggleQuickInput('sms')">💬 문자 붙여넣기</button>
+      <button type="button" class="quick-btn" id="quick-photo-btn" onclick="toggleQuickInput('photo')">📷 영수증 사진</button>
     </div>
 
     <div class="form-group" id="sms-block" style="display:none">
@@ -1335,6 +1364,7 @@ function rebuildCategories() {
 }
 
 const THEMES = [
+  { key:'cream', name:'크림', colors:['#f6f2e9','#4c63b6'], desc:'따뜻한 미색, 눈이 편한 기본' },
   { key:'navy', name:'네이비 민트', colors:['#0f1628','#4ecdc4'], desc:'차분하고 모던한 느낌' },
   { key:'dark-gold', name:'다크 골드', colors:['#141414','#d4af37'], desc:'고급스러운 프리미엄' },
   { key:'white-indigo', name:'화이트 인디고', colors:['#f5f6fa','#4361ee'], desc:'깔끔하고 밝은 느낌' },
@@ -1394,8 +1424,9 @@ async function initApp() {
 document.addEventListener("DOMContentLoaded", () => { setTimeout(initApp, 300); });
 
 function loadSettings() {
-  const theme = localStorage.getItem('theme') || 'navy';
+  const theme = localStorage.getItem('theme') || 'cream';
   document.body.setAttribute('data-theme', theme);
+  syncThemeColor();
   demoMode = localStorage.getItem('demoMode') === 'true';
   const userName = localStorage.getItem('userName') || '';
   document.getElementById('username-display').textContent = userName || '내 이름 설정';
@@ -2141,8 +2172,15 @@ function renderThemeGrids() {
 function setTheme(t) {
   document.body.setAttribute('data-theme', t);
   localStorage.setItem('theme', t);
+  syncThemeColor();
   renderThemeGrids();
   setTimeout(() => { renderStatsPage(); }, 100);
+}
+// 상태바(아이폰 시계·배터리 뒤) 색을 테마 배경에 맞춘다. 안 맞추면 밝은 테마인데 상단이 어둡게 남는다.
+function syncThemeColor() {
+  const bg = getComputedStyle(document.body).getPropertyValue('--bg').trim();
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta && bg) meta.setAttribute('content', bg);
 }
 
 // 테마 모달은 제거했다(설정의 테마 그리드로 일원화). renderThemeGrids는 설정 그리드에 계속 쓴다.
