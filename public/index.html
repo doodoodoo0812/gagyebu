@@ -2273,8 +2273,8 @@ function openAddModal(tx = null, clone = false) {
   renderCategoryGrid(currentTxType);
   renderNameChips();
   openModal('add-modal');
-  // setTimeout 안에서 focus()하면 제스처 컨텍스트를 벗어나 iOS가 키보드를 안 띄운다.
-  document.getElementById('tx-amount').focus();
+  // 자동 포커스 안 함 — + 누르자마자 숫자 키패드가 튀어나오는 게 불편하다는 요청.
+  // 금액칸을 직접 탭할 때만 키패드가 뜬다.
 }
 
 function setType(type) {
@@ -3061,7 +3061,9 @@ function changeMonth(delta) {
 }
 
 function updateMonthLabel() {
-  const label = `${currentYear}년 ${currentMonth+1}월`;
+  const now = new Date();
+  const isThisMonth = currentYear === now.getFullYear() && currentMonth === now.getMonth();
+  const label = `${currentYear}년 ${currentMonth+1}월${isThisMonth ? ' · 이번 달' : ''}`;
   ['month-label','month-label2','month-label3','month-label4'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.textContent = label;
