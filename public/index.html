@@ -726,7 +726,15 @@ body {
     <div class="card">
       <div class="card-header">
         <div class="card-title">카테고리별 지출</div>
+        <!-- 같은 카테고리도 '쓴 달'과 '빠지는 달'이 달라 숫자가 다르다. 어느 기준인지 늘 보이게 둔다. -->
+        <div style="display:flex;gap:4px">
+          <button id="catbasis-spent" onclick="setCatBasis('spent')"
+                  style="font-size:11px;padding:3px 8px;border-radius:12px;border:1px solid var(--border);background:var(--accent);color:var(--bg);cursor:pointer">쓴 기준</button>
+          <button id="catbasis-out" onclick="setCatBasis('out')"
+                  style="font-size:11px;padding:3px 8px;border-radius:12px;border:1px solid var(--border);background:var(--bg2);color:var(--text2);cursor:pointer">나갈 기준</button>
+        </div>
       </div>
+      <div id="cat-basis-note" style="font-size:11px;color:var(--text3);margin:-4px 0 8px"></div>
       <div id="cat-bars"></div>
     </div>
 
@@ -1810,6 +1818,7 @@ async function loadData() {
   await applyRecurring();
   await loadCategories();   // 사용자 카테고리(내장+커스텀 병합). 실패해도 내장으로 동작.
   await loadCardSettings(); // 카드 결제일·이용기간 (없으면 기본값)
+  setCatBasis(catBasis);    // 저장해둔 기준으로 토글 표시를 맞춘다
   renderAll();
   refreshAiStatus();       // 설정 화면의 AI 상태 표시 (실패해도 앱엔 지장 없으므로 await 안 함)
 }
@@ -1848,6 +1857,19 @@ const DEFAULT_CARDS = [
   { name: '현대', startDay: 14, payDay: 25, owner: '두두·아내' },
 ];
 let cardSettings = [];
+// 홈 카테고리 막대의 기준: 'spent'(이 달에 쓴 돈) | 'out'(이 달에 통장에서 빠지는 돈)
+let catBasis = localStorage.getItem('cat_basis') === 'out' ? 'out' : 'spent';
+
+function setCatBasis(v) {
+  catBasis = (v === 'out') ? 'out' : 'spent';
+  localStorage.setItem('cat_basis', catBasis);
+  const on = 'background:var(--accent);color:var(--bg)';
+  const off = 'background:var(--bg2);color:var(--text2)';
+  const s = document.getElementById('catbasis-spent'), o = document.getElementById('catbasis-out');
+  if (s) s.style.cssText = `font-size:11px;padding:3px 8px;border-radius:12px;border:1px solid var(--border);cursor:pointer;${catBasis === 'spent' ? on : off}`;
+  if (o) o.style.cssText = `font-size:11px;padding:3px 8px;border-radius:12px;border:1px solid var(--border);cursor:pointer;${catBasis === 'out' ? on : off}`;
+  renderHomePage();
+}
 
 async function loadCardSettings() {
   try {
@@ -1898,6 +1920,43 @@ function cardBillsForMonth(year, monthIdx) {
   return cardSettings
     .map(c => cardBillFor(c, year, monthIdx))
     .sort((a, b) => a.payDate.localeCompare(b.payDate));
+}
+
+// 거래 한 건이 '언제 통장에서 빠지는지'(결제월, YYYY-MM).
+// 카드마다 이용 시작일이 달라도 거래 하나하나는 반드시 어느 한 결제월에 속한다 —
+// 시작일(S) 이후에 쓴 건 다음 달 결제, 그 전에 쓴 건 이번 달 결제.
+//   국민(S=12): 8/12 사용 → 9월 결제,  8/11 사용 → 8월 결제
+// 현금·계좌이체(카드 없음)는 쓴 즉시 빠지므로 그 달이 곧 결제월이다.
+// 이 함수 덕분에 총액뿐 아니라 '결제월 기준 카테고리별 지출'도 셀 수 있다.
+function billingMonthOf(t) {
+  const parts = String(t.date || '').split('-').map(Number);
+  const [y, m, d] = parts;
+  if (!y || !m || !d) return String(t.date || '').slice(0, 7);
+  const card = t.card ? cardSettings.find(c => c.name === t.card) : null;
+  if (!card) return `${y}-${String(m).padStart(2, '0')}`;
+  const s = clampDay(y, m - 1, card.startDay);     // 그 달에 없는 날이면 말일로
+  let by = y, bm = m;
+  if (d >= s) { bm = m + 1; if (bm > 12) { bm = 1; by = y + 1; } }
+  return `${by}-${String(bm).padStart(2, '0')}`;
+}
+
+// 그 결제월에 빠질 지출 거래들 (카드·현금 전부)
+function outflowTxFor(year, monthIdx) {
+  const ym = `${year}-${String(monthIdx + 1).padStart(2, '0')}`;
+  return transactions.filter(t => t.type === 'expense' && billingMonthOf(t) === ym);
+}
+
+// 이번 달 통장에서 '실제로 빠지는 돈' — 카드값 + 현금·이체
+function monthOutflow(year, monthIdx) {
+  const items = outflowTxFor(year, monthIdx);
+  const cards = items.filter(t => t.card).reduce((s, t) => s + t.amount, 0);
+  const nonCardItems = items.filter(t => !t.card);
+  const nonCard = nonCardItems.reduce((s, t) => s + t.amount, 0);
+  return {
+    cards, nonCard, total: cards + nonCard,
+    bills: cardBillsForMonth(year, monthIdx),
+    nonCardCount: nonCardItems.length, items,
+  };
 }
 
 function openCardBillsModal() {
@@ -2283,9 +2342,20 @@ function renderHomePage() {
     </div>
   `;
 
-  // Category bars
+  // Category bars — 기준에 따라 모수가 다르다.
+  //  '쓴 기준'  = 이 달에 결제한 것(달력). 소비 습관을 본다.
+  //  '나갈 기준' = 이 달에 통장에서 빠지는 것(카드 결제주기 반영). 실제 살림살이를 본다.
+  const basisItems = (catBasis === 'out')
+    ? outflowTxFor(currentYear, currentMonth)
+    : tx.filter(t => t.type === 'expense');
+  const noteEl = document.getElementById('cat-basis-note');
+  if (noteEl) {
+    noteEl.textContent = (catBasis === 'out')
+      ? '이 달에 통장에서 빠지는 돈 기준 (카드는 결제주기를 반영해요)'
+      : '이 달에 결제한 돈 기준 (카드값이 빠지는 달은 다를 수 있어요)';
+  }
   const catTotals = {};
-  tx.filter(t=>t.type==='expense').forEach(t => {
+  basisItems.forEach(t => {
     catTotals[t.category] = (catTotals[t.category]||0) + t.amount;
   });
   const sorted = Object.entries(catTotals).sort((a,b)=>b[1]-a[1]);
@@ -2343,14 +2413,21 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
       <span style="color:var(--text3)">· 하루 평균 ${fmtMoney(Math.round(perDay))} · ${remain}일 남음</span>${vsPrev}</div>`);
   }
 
-  // ①-b 이번 달 통장에서 빠질 카드값. '쓴 달'과 '빠지는 달'이 달라서, 이게 진짜 이번 달 살림살이다.
-  const bills = cardBillsForMonth(currentYear, currentMonth).filter(b => b.total > 0);
-  if (bills.length) {
-    const sum = bills.reduce((s, b) => s + b.total, 0);
-    const soon = bills.map(b => `${esc(b.card.name)} ${b.payDate.slice(8)}일`).slice(0, 3).join(' · ');
-    lines.push(`<div style="font-size:12px;color:var(--text2);margin-top:6px;cursor:pointer" onclick="openCardBillsModal()">
-      💳 이번 달 나갈 카드값 <b>${fmtMoney(sum)}</b>
-      <span style="color:var(--text3)">· ${soon}${bills.length > 3 ? ' 외' : ''} · 자세히 ›</span></div>`);
+  // ①-b '쓴 돈'(달력 기준)과 '나갈 돈'(통장 기준)을 나란히.
+  //  카드는 쓴 달과 빠지는 달이 달라서, 이 둘을 같이 봐야 소비 습관과 실제 살림살이가 둘 다 보인다.
+  const flow = monthOutflow(currentYear, currentMonth);
+  if (flow.total > 0 || expense > 0) {
+    const diff = flow.total - expense;
+    const diffTxt = diff === 0 ? '쓴 돈과 같아요'
+      : `쓴 돈보다 ${diff > 0 ? '▲' : '▼'} <b style="color:${diff > 0 ? 'var(--expense)' : 'var(--income)'}">${fmtMoney(Math.abs(diff))}</b>`;
+    const soon = flow.bills.filter(b => b.total > 0)
+      .map(b => `${esc(b.card.name)} ${b.payDate.slice(8)}일`).slice(0, 3).join(' · ');
+    lines.push(`<div style="font-size:12px;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border);cursor:pointer" onclick="openCardBillsModal()">
+      🏦 이번 달 <b>나갈 돈</b> <b style="color:var(--expense)">${fmtMoney(flow.total)}</b>
+      <span style="color:var(--text3)">· ${diffTxt}</span>
+      <div style="color:var(--text3);margin-top:2px">
+        💳 카드 ${fmtMoney(flow.cards)}${soon ? ` (${soon}${flow.bills.filter(b => b.total > 0).length > 3 ? ' 외' : ''})` : ''}
+        · 💵 현금·이체 ${fmtMoney(flow.nonCard)} · 자세히 ›</div></div>`);
   }
 
   // ② 고정 vs 변동 (이번 달 자동등록된 정기지출이 있을 때만)
@@ -2365,7 +2442,11 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
   // ③ 전월 대비 가장 많이 변한 카테고리 한 줄 (증가·감소 통틀어, 1만원 미만은 잔소리라 숨김)
   const changeEl = document.getElementById('home-change');
   const prevCat = {};
-  prev.filter(t => t.type === 'expense').forEach(t => { prevCat[t.category] = (prevCat[t.category] || 0) + t.amount; });
+  // 전월도 같은 기준으로 세야 한다. 기준이 섞이면 '늘었다/줄었다'가 거짓말이 된다.
+  const prevItems = (catBasis === 'out')
+    ? outflowTxFor(currentMonth === 0 ? currentYear - 1 : currentYear, currentMonth === 0 ? 11 : currentMonth - 1)
+    : prev.filter(t => t.type === 'expense');
+  prevItems.forEach(t => { prevCat[t.category] = (prevCat[t.category] || 0) + t.amount; });
   const allCats = new Set([...Object.keys(catTotals), ...Object.keys(prevCat)]);
   let big = null;
   for (const c of allCats) {
