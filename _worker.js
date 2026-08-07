@@ -356,6 +356,27 @@ export default {
         return json({ transactions: r.results ?? [] });
       }
 
+      // ── 전체 기간 검색 ──
+      //  화면 배열은 최근 1년치뿐이라 그보다 오래된 건 로컬 검색으로 안 잡힌다. DB 전체를 검색한다.
+      if (path === '/api/search' && request.method === 'GET') {
+        const q = (url.searchParams.get('q') || '').trim();
+        if (!q) return json({ transactions: [], limited: false });
+        const like = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';   // LIKE 와일드카드 이스케이프
+        const digits = q.replace(/[^0-9]/g, '');
+        const LIMIT = 300;
+        const r = await env.DB.prepare(
+          `SELECT ${TX_COLS} FROM transactions
+           WHERE deleted_at IS NULL AND (
+             name LIKE ?1 ESCAPE '\\' OR memo LIKE ?1 ESCAPE '\\'
+             OR category LIKE ?1 ESCAPE '\\' OR user_name LIKE ?1 ESCAPE '\\'
+             OR (length(?2) >= 2 AND CAST(amount AS TEXT) LIKE '%' || ?2 || '%')
+           )
+           ORDER BY date DESC LIMIT ${LIMIT}`
+        ).bind(like, digits).all();
+        const rows = r.results ?? [];
+        return json({ transactions: rows, limited: rows.length >= LIMIT });
+      }
+
       // ── 거래 추가 ──
       if (path === '/api/tx' && request.method === 'POST') {
         const { tx, err } = cleanTx(await request.json().catch(() => ({})));

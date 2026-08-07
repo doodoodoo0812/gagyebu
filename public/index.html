@@ -732,7 +732,7 @@ body {
 
     <div style="padding:0 4px 8px">
       <input class="form-input" id="tx-search" type="search" inputmode="search"
-             placeholder="🔎 이름·메모·카테고리 검색 (최근 1년)" oninput="onTxSearch(this.value)">
+             placeholder="🔎 이름·메모·카테고리·금액 검색 (전체 기간)" oninput="onTxSearch(this.value)">
     </div>
 
     <div class="tab-bar" id="category-filter-tabs">
@@ -1954,20 +1954,22 @@ function renderHistoryPage() {
   `).join('');
   document.getElementById('category-filter-tabs').innerHTML = tabHTML;
 
-  // 검색 중이면 로드된 6개월 전체에서, 아니면 이번 달에서 찾는다.
-  let source = searching ? transactions : monthTx;
-  if (selectedCategoryFilter !== '전체') source = source.filter(t=>t.category===selectedCategoryFilter);
+  // 검색 중이면 서버 전체검색 결과에서, 아니면 이번 달에서. 데모 모드는 로컬(전 기간 로컬 저장)에서 거른다.
+  let source;
   if (searching) {
-    const ql = q.toLowerCase();
-    const qDigits = q.replace(/[^0-9]/g,'');   // "13,500"·"13500" 둘 다 금액으로 매칭
-    source = source.filter(t =>
-      (t.name||'').toLowerCase().includes(ql) ||
-      (t.memo||'').toLowerCase().includes(ql) ||
-      (t.category||'').toLowerCase().includes(ql) ||
-      (t.user_name||'').toLowerCase().includes(ql) ||
-      (qDigits.length>=2 && String(t.amount).includes(qDigits))
-    );
+    if (demoMode) {
+      const ql = q.toLowerCase(), qDigits = q.replace(/[^0-9]/g,'');
+      source = transactions.filter(t =>
+        (t.name||'').toLowerCase().includes(ql) || (t.memo||'').toLowerCase().includes(ql) ||
+        (t.category||'').toLowerCase().includes(ql) || (t.user_name||'').toLowerCase().includes(ql) ||
+        (qDigits.length>=2 && String(t.amount).includes(qDigits)));
+    } else {
+      source = searchResults;   // 서버가 이미 전 기간을 매칭해 돌려줌
+    }
+  } else {
+    source = monthTx;
   }
+  if (selectedCategoryFilter !== '전체') source = source.filter(t=>t.category===selectedCategoryFilter);
   const sorted = [...source].sort((a,b)=>b.date.localeCompare(a.date));
 
   // Group by date
@@ -1986,7 +1988,7 @@ function renderHistoryPage() {
   });
 
   const countLine = searching
-    ? `<div style="font-size:12px;color:var(--text3);padding:4px 4px 8px">🔎 "${esc(q)}" 검색결과 ${sorted.length}건 · 최근 1년</div>`
+    ? `<div style="font-size:12px;color:var(--text3);padding:4px 4px 8px">🔎 "${esc(q)}" 검색결과 ${sorted.length}건 · 전체 기간${searchLimited ? ' (많아서 최근 300건만)' : ''}</div>`
     : '';
   const empty = searching
     ? '<div class="empty-state"><div class="empty-icon">🔍</div><p>검색 결과가 없어요</p></div>'
@@ -1994,9 +1996,27 @@ function renderHistoryPage() {
   document.getElementById('tx-list').innerHTML = countLine + (html || empty);
 }
 
+let searchResults = [];
+let searchLimited = false;
+let _searchTimer = null;
 function onTxSearch(v) {
   txSearchQuery = v || '';
-  renderHistoryPage();   // 검색은 로컬(로드된 최근 1년)에서만 거르므로 서버 재요청 없음
+  const q = txSearchQuery.trim();
+  clearTimeout(_searchTimer);
+  if (!q || demoMode) { renderHistoryPage(); return; }   // 데모는 로컬 검색, 빈 검색은 이번 달
+  // 타이핑이 멈추면 서버에 전 기간 검색을 한 번만 보낸다(글자마다 요청하지 않게 디바운스).
+  _searchTimer = setTimeout(async () => {
+    try {
+      const r = await api('/search?q=' + encodeURIComponent(q));
+      if (txSearchQuery.trim() !== q) return;   // 그새 검색어가 바뀌었으면 이 결과는 버린다
+      searchResults = r.transactions || [];
+      searchLimited = !!r.limited;
+    } catch(e) {
+      searchResults = []; searchLimited = false;
+    }
+    renderHistoryPage();
+  }, 250);
+  renderHistoryPage();   // 입력 즉시 화면은 갱신(직전 결과 보이다가 새 결과로 대체)
 }
 
 // 달을 넘기거나 목록 탭에 새로 들어올 때 검색어를 비운다(검색은 월과 무관하게 최근 1년을 훑기 때문에
