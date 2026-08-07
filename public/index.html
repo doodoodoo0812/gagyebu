@@ -901,6 +901,16 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
+      <div class="settings-item" onclick="openCardBillsModal()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">💳</div>
+          <div>
+            <div class="settings-item-text">카드값 · 결제일 설정</div>
+            <div class="settings-item-sub">이번 달 통장에서 빠질 카드값 · 카드별 결제일/이용기간</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
       <div class="settings-item" onclick="openCategoryModal()">
         <div class="settings-item-left">
           <div class="settings-item-icon">🏷️</div>
@@ -1093,8 +1103,13 @@ body {
     </div>
 
     <div class="form-group">
-      <label class="form-label">카테고리</label>
-      <div class="category-grid" id="cat-grid"></div>
+      <!-- 편집 입구를 설정 깊숙이 두면 정작 카테고리를 고르는 이 자리에서 못 고친다. 여기에 둔다. -->
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <label class="form-label" style="margin:0">카테고리</label>
+        <button type="button" onclick="openCategoryModal(currentTxType)"
+                style="background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;padding:2px 4px">✏️ 편집·추가</button>
+      </div>
+      <div class="category-grid" id="cat-grid" style="margin-top:6px"></div>
     </div>
 
     <div class="form-group">
@@ -1181,6 +1196,26 @@ body {
             style="background:rgba(255,80,80,0.1);border-color:var(--expense);color:var(--expense);margin-bottom:8px;display:none"
             onclick="emptyTrash()">휴지통 비우기 (전체 완전삭제)</button>
     <button class="btn-secondary" onclick="closeModal('trash-modal')">닫기</button>
+  </div>
+</div>
+
+<!-- CARD BILLS MODAL -->
+<div class="modal-backdrop" id="card-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title" style="margin-bottom:4px">💳 카드값 (이번 달 나갈 돈)</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:12px;line-height:1.5">
+      카드는 <b>쓴 달</b>과 <b>통장에서 빠지는 달</b>이 달라요. 카드마다 이용기간이 달라서, 그걸 맞춰야
+      이번 달 실제 살림살이가 보입니다.
+    </div>
+    <div id="card-bills-list"></div>
+    <div style="font-size:12px;color:var(--text2);font-weight:700;margin:16px 2px 6px">결제일 설정</div>
+    <div style="font-size:11px;color:var(--text3);margin:0 2px 8px;line-height:1.5">
+      <b>시작일</b> = 새 이용기간이 시작되는 날, <b>결제일</b> = 통장에서 빠지는 날
+    </div>
+    <div id="card-settings-list"></div>
+    <button class="btn-secondary" onclick="addCardRow()" style="margin-top:4px">+ 카드 추가</button>
+    <button class="btn-secondary" onclick="closeModal('card-modal')" style="margin-top:8px">닫기</button>
   </div>
 </div>
 
@@ -1774,6 +1809,7 @@ async function loadData() {
   await loadRecurring();   // 규칙은 서버에 있으므로 매번 받아온다(배우자가 추가·삭제했을 수 있다)
   await applyRecurring();
   await loadCategories();   // 사용자 카테고리(내장+커스텀 병합). 실패해도 내장으로 동작.
+  await loadCardSettings(); // 카드 결제일·이용기간 (없으면 기본값)
   renderAll();
   refreshAiStatus();       // 설정 화면의 AI 상태 표시 (실패해도 앱엔 지장 없으므로 await 안 함)
 }
@@ -1781,11 +1817,187 @@ async function loadData() {
 // 사용자 카테고리를 서버(또는 데모 localStorage)에서 불러와 CATEGORIES에 병합한다.
 async function loadCategories() {
   try {
-    if (demoMode) customCategories = JSON.parse(localStorage.getItem('custom_categories_demo') || '[]');
-    else if (authToken) customCategories = (await api('/categories')).categories || [];
+    if (demoMode) {
+      customCategories = JSON.parse(localStorage.getItem('custom_categories_demo') || '[]');
+      categoryOverrides = normalizeOverrides(JSON.parse(localStorage.getItem('category_overrides_demo') || 'null'));
+    } else if (authToken) {
+      customCategories = (await api('/categories')).categories || [];
+      // 편집 내용(이름·이모지·숨김·순서)은 서버에 있어야 두 폰이 같은 화면을 본다.
+      categoryOverrides = normalizeOverrides((await api('/settings/categories')).overrides);
+    }
   } catch (e) { /* 실패해도 내장 카테고리로 동작한다 */ }
   rebuildCategories();
   renderCategoryGrids();    // 예산·정기 지출의 카테고리 선택칸을 새 목록으로 갱신
+}
+
+// ===== 카드 결제일 / 이용기간 =====
+// 한국 카드는 '쓴 달'과 '통장에서 빠지는 달'이 다르다. 카드마다 이용기간 시작일과 결제일이 달라서,
+// 8월에 쓴 돈이 9월에 빠지기도 한다. 이 둘을 알면 "이번 달 실제로 나갈 돈"을 계산할 수 있다.
+//
+// 규칙: 결제월 M, 이용 시작일 S, 결제일 P 일 때
+//   이용기간 = (M-1)월 S일 ~ M월 (S-1)일,  결제 = M월 P일
+//   예) 국민(S=12, P=25): 8/12~9/11 사용분 → 9/25 결제
+//       하나(S=8,  P=20): 8/8 ~9/7  사용분 → 9/20 결제
+const DEFAULT_CARDS = [
+  { name: '하나', startDay: 8,  payDay: 20, owner: '아내' },
+  { name: 'BC',   startDay: 11, payDay: 23, owner: '두두·아내' },
+  { name: '국민', startDay: 12, payDay: 25, owner: '두두·아내' },
+  { name: '농협', startDay: 12, payDay: 25, owner: '아내' },
+  { name: '우리', startDay: 12, payDay: 25, owner: '아내' },
+  { name: '삼성', startDay: 13, payDay: 25, owner: '두두·아내' },
+  { name: '현대', startDay: 14, payDay: 25, owner: '두두·아내' },
+];
+let cardSettings = [];
+
+async function loadCardSettings() {
+  try {
+    if (demoMode) cardSettings = JSON.parse(localStorage.getItem('card_settings_demo') || 'null') || DEFAULT_CARDS;
+    else if (authToken) cardSettings = (await api('/settings/cards')).cards || DEFAULT_CARDS;
+  } catch (e) { cardSettings = DEFAULT_CARDS; }
+  if (!Array.isArray(cardSettings) || !cardSettings.length) cardSettings = DEFAULT_CARDS;
+}
+
+async function saveCardSettings() {
+  try {
+    if (demoMode) localStorage.setItem('card_settings_demo', JSON.stringify(cardSettings));
+    else if (authToken) await api('/settings/cards', { method: 'POST', body: { cards: cardSettings } });
+  } catch (e) { showToast('❌ 저장 실패: ' + e.message); return false; }
+  return true;
+}
+
+// 그 달에 없는 날은 말일로 맞춘다(2월에 31일 결제 → 2/28).
+function clampDay(y, mIdx, day) {
+  const last = new Date(y, mIdx + 1, 0).getDate();
+  return Math.min(day, last);
+}
+function ymd(y, mIdx, day) {
+  return `${y}-${String(mIdx + 1).padStart(2, '0')}-${String(clampDay(y, mIdx, day)).padStart(2, '0')}`;
+}
+
+// 결제월(year, monthIdx)에 이 카드로 빠질 금액과 그 이용기간을 계산한다.
+function cardBillFor(card, year, monthIdx) {
+  const startThis = ymd(year, monthIdx, card.startDay);                       // 당월 시작일
+  const prevY = monthIdx === 0 ? year - 1 : year;
+  const prevM = monthIdx === 0 ? 11 : monthIdx - 1;
+  const from = ymd(prevY, prevM, card.startDay);                             // 전월 시작일(포함)
+  const payDate = ymd(year, monthIdx, card.payDay);
+  // 종료일은 '당월 시작일 하루 전'. 문자열 비교로 거르므로 to는 '미만'으로 쓴다.
+  const items = transactions.filter(t =>
+    t.type === 'expense' && t.card === card.name && t.date >= from && t.date < startThis
+  );
+  const total = items.reduce((s, t) => s + t.amount, 0);
+  // 표시용 종료일(포함) = 당월 시작일 - 1일
+  const endD = new Date(year, monthIdx, clampDay(year, monthIdx, card.startDay));
+  endD.setDate(endD.getDate() - 1);
+  const to = `${endD.getFullYear()}-${String(endD.getMonth() + 1).padStart(2, '0')}-${String(endD.getDate()).padStart(2, '0')}`;
+  return { card, from, to, payDate, total, count: items.length };
+}
+
+// 이번 달(화면에서 보고 있는 달) 카드값 전체
+function cardBillsForMonth(year, monthIdx) {
+  return cardSettings
+    .map(c => cardBillFor(c, year, monthIdx))
+    .sort((a, b) => a.payDate.localeCompare(b.payDate));
+}
+
+function openCardBillsModal() {
+  renderCardBills();
+  renderCardSettingsList();
+  openModal('card-modal');
+}
+
+function renderCardBills() {
+  const box = document.getElementById('card-bills-list');
+  const bills = cardBillsForMonth(currentYear, currentMonth);
+  const withMoney = bills.filter(b => b.total > 0);
+  const sum = withMoney.reduce((s, b) => s + b.total, 0);
+  const fmtRange = (f, t) => `${f.slice(5).replace('-', '/')} ~ ${t.slice(5).replace('-', '/')}`;
+
+  if (!withMoney.length) {
+    box.innerHTML = `<div style="font-size:12px;color:var(--text3);padding:12px 2px">
+      ${currentMonth + 1}월에 빠질 카드값이 없어요. 거래를 넣을 때 카드사를 골라주면 여기 잡힙니다.</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:10px;text-align:center">
+      <div style="font-size:11px;color:var(--text3)">${currentYear}년 ${currentMonth + 1}월에 빠질 카드값 합계</div>
+      <div style="font-family:var(--font-mono);font-size:22px;font-weight:700;color:var(--expense);margin-top:4px">${fmtMoney(sum)}</div>
+    </div>
+    ${withMoney.map(b => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px">
+        <div style="min-width:0">
+          <div style="font-size:13px;color:var(--text);font-weight:600">💳 ${esc(b.card.name)}
+            <span style="font-size:11px;color:var(--text3);font-weight:400">${b.card.owner ? '· ' + esc(b.card.owner) : ''}</span></div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">
+            ${b.payDate.slice(8)}일 결제 · 이용 ${fmtRange(b.from, b.to)} · ${b.count}건</div>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:14px;color:var(--expense);font-weight:700;flex-shrink:0">${fmtMoney(b.total)}</div>
+      </div>`).join('')}`;
+}
+
+function renderCardSettingsList() {
+  const box = document.getElementById('card-settings-list');
+  box.innerHTML = cardSettings.map((c, i) => `
+    <div data-i="${i}" style="background:var(--surface2);border-radius:10px;padding:8px;margin-bottom:6px">
+      <div style="display:flex;gap:6px;align-items:center">
+        <input class="form-input" value="${esc(c.name)}" maxlength="20" placeholder="카드사"
+               style="margin:0;flex:1;min-width:0;padding:8px;font-size:13px"
+               onchange="setCardField(${i},'name',this.value)">
+        <button onclick="removeCardRow(${i})" title="삭제"
+                style="width:30px;height:34px;flex-shrink:0;border:1px solid var(--expense);border-radius:6px;background:transparent;color:var(--expense);cursor:pointer;font-size:12px">🗑</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+        <label style="font-size:11px;color:var(--text3);flex-shrink:0">시작</label>
+        <input class="form-input" type="number" min="1" max="31" value="${c.startDay}"
+               style="margin:0;width:62px;padding:6px;font-size:13px" onchange="setCardField(${i},'startDay',this.value)">
+        <label style="font-size:11px;color:var(--text3);flex-shrink:0">결제</label>
+        <input class="form-input" type="number" min="1" max="31" value="${c.payDay}"
+               style="margin:0;width:62px;padding:6px;font-size:13px" onchange="setCardField(${i},'payDay',this.value)">
+        <input class="form-input" value="${esc(c.owner || '')}" maxlength="40" placeholder="누구 카드"
+               style="margin:0;flex:1;min-width:0;padding:6px;font-size:12px" onchange="setCardField(${i},'owner',this.value)">
+      </div>
+    </div>`).join('');
+}
+
+async function setCardField(i, field, value) {
+  const c = cardSettings[i];
+  if (!c) return;
+  if (field === 'startDay' || field === 'payDay') {
+    const n = parseInt(value, 10);
+    if (!Number.isInteger(n) || n < 1 || n > 31) { showToast('1~31 사이 날짜를 넣어 주세요'); renderCardSettingsList(); return; }
+    c[field] = n;
+  } else {
+    c[field] = String(value || '').trim().slice(0, 40);
+  }
+  await saveCardSettings();
+  renderCardBills();
+  renderHomePage();
+}
+
+async function addCardRow() {
+  cardSettings.push({ name: '새 카드', startDay: 1, payDay: 15, owner: '' });
+  await saveCardSettings();
+  renderCardSettingsList();
+}
+
+async function removeCardRow(i) {
+  const c = cardSettings[i];
+  if (!c) return;
+  if (!confirm(`'${c.name}' 카드 설정을 지울까요?\n(이미 기록한 거래는 그대로 남아요)`)) return;
+  cardSettings.splice(i, 1);
+  await saveCardSettings();
+  renderCardSettingsList();
+  renderCardBills();
+  renderHomePage();
+}
+
+// 편집 내용을 서버에 저장한다(부부가 공유해야 하므로 localStorage 금지 — 데모만 로컬).
+async function saveCategoryOverrides() {
+  try {
+    if (demoMode) localStorage.setItem('category_overrides_demo', JSON.stringify(categoryOverrides));
+    else if (authToken) await api('/settings/categories', { method: 'POST', body: { overrides: categoryOverrides } });
+  } catch (e) { showToast('❌ 저장 실패: ' + e.message); return false; }
+  return true;
 }
 
 // ===== 카테고리 관리 (사용자 추가/삭제) =====
@@ -1793,8 +2005,10 @@ let newCatType = 'expense';
 let selectedNewCatEmoji = '🏷️';
 const CAT_EMOJI_PALETTE = ['🏷️','🎉','🎂','💐','🎁','🐶','🐱','🚗','⛽','🏥','💊','🍔','🍜','🍺','☕','👶','🧸','📱','💻','🎮','🏋️','⚽','🎨','📖','✈️','🏨','💵','🏦','🧾','🔧','🪴','🚿','🎓','💡','🩺','🛠️'];
 
-function openCategoryModal() {
-  setNewCatType('expense');
+// type을 주면 그 탭으로 연다(거래추가 화면에서 열면 지금 보던 지출/수입 그대로).
+function openCategoryModal(type) {
+  editingEmojiKey = null;
+  setNewCatType(type === 'income' ? 'income' : 'expense');
   document.getElementById('cat-name-input').value = '';
   selectedNewCatEmoji = '🏷️';
   renderCatEmojiGrid();
@@ -1804,8 +2018,10 @@ function openCategoryModal() {
 
 function setNewCatType(type) {
   newCatType = type;
+  editingEmojiKey = null;
   document.getElementById('cat-type-expense').classList.toggle('active', type === 'expense');
   document.getElementById('cat-type-income').classList.toggle('active', type === 'income');
+  renderCatManageList();   // 탭이 관리 목록도 함께 바꾼다(지출 탭이면 지출 카테고리만 편집)
 }
 
 function renderCatEmojiGrid() {
@@ -1816,23 +2032,118 @@ function renderCatEmojiGrid() {
 }
 function selectNewCatEmoji(e) { selectedNewCatEmoji = e; renderCatEmojiGrid(); }
 
+// 지금 이모지 팔레트를 펼쳐 둔 카테고리(한 번에 하나만). null이면 접힘.
+let editingEmojiKey = null;
+
+// 내장 카테고리도 '이름표시·이모지·숨김·순서'를 바꿀 수 있다. 단 key(원래 이름)는 절대 안 바꾼다 —
+// 거래에 그 key가 저장돼 있어서, 바꾸면 과거 기록이 미아가 된다. 그래서 바꾸는 건 '보이는 것'뿐이다.
 function renderCatManageList() {
   const box = document.getElementById('cat-manage-list');
-  const section = (type, label) => {
-    const custom = customCategories.filter(c => c.type === type);
-    const builtinNames = BUILTIN_CATEGORIES[type].map(c => c.emoji + c.key).join(' · ');
-    const items = custom.length ? custom.map(c => `
-      <div class="tx-item" data-id="${esc(c.id)}" style="cursor:default;padding:8px 10px">
-        <div class="tx-icon">${esc(c.emoji)}</div>
-        <div class="tx-info"><div class="tx-name">${esc(c.name)}</div></div>
-        <button class="btn-secondary" style="padding:4px 12px;font-size:12px;margin:0;width:auto;border-color:var(--expense);color:var(--expense)"
-                onclick="deleteCategory(this.closest('[data-id]').dataset.id)">삭제</button>
-      </div>`).join('') : `<div style="font-size:12px;color:var(--text3);padding:6px 2px">추가한 ${label} 카테고리가 없어요</div>`;
-    return `<div style="font-size:12px;color:var(--text2);font-weight:700;margin:12px 2px 6px">${label}</div>
-      ${items}
-      <div style="font-size:11px;color:var(--text3);padding:6px 2px 2px;line-height:1.5">기본: ${esc(builtinNames)}</div>`;
+  const type = newCatType;
+  const list = CAT_ALL[type] || [];
+  const movable = list.filter(c => !TAIL_KEYS.has(c.key));   // 기타/기타수입은 늘 맨 끝이라 이동 대상 아님
+
+  const row = (c) => {
+    const isTail = TAIL_KEYS.has(c.key);
+    const pos = movable.findIndex(m => m.key === c.key);
+    const dim = c.hidden ? 'opacity:0.45;' : '';
+    return `
+    <div data-key="${esc(c.key)}" style="background:var(--surface2);border-radius:10px;padding:8px;margin-bottom:6px;${dim}">
+      <div style="display:flex;align-items:center;gap:6px">
+        <button onclick="toggleCatEmojiPicker(this.closest('[data-key]').dataset.key)"
+                title="이모지 바꾸기"
+                style="font-size:20px;width:36px;height:36px;flex-shrink:0;border:none;border-radius:8px;background:var(--bg2);cursor:pointer">${esc(c.emoji)}</button>
+        <input class="form-input" value="${esc(c.label)}" maxlength="20" style="margin:0;flex:1;min-width:0;padding:8px;font-size:13px"
+               onchange="setCatLabel(this.closest('[data-key]').dataset.key, this.value)">
+        ${isTail ? '<span style="width:56px;flex-shrink:0"></span>' : `
+        <button onclick="moveCat(this.closest('[data-key]').dataset.key,-1)" ${pos <= 0 ? 'disabled' : ''}
+                title="위로" style="width:26px;height:32px;flex-shrink:0;border:1px solid var(--border);border-radius:6px;background:var(--bg2);cursor:pointer;font-size:12px;${pos <= 0 ? 'opacity:.3' : ''}">↑</button>
+        <button onclick="moveCat(this.closest('[data-key]').dataset.key,1)" ${pos < 0 || pos >= movable.length - 1 ? 'disabled' : ''}
+                title="아래로" style="width:26px;height:32px;flex-shrink:0;border:1px solid var(--border);border-radius:6px;background:var(--bg2);cursor:pointer;font-size:12px;${pos < 0 || pos >= movable.length - 1 ? 'opacity:.3' : ''}">↓</button>`}
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+        ${isTail
+          ? `<span style="font-size:11px;color:var(--text3)">분류가 안 될 때 쓰는 칸이라 숨기거나 옮길 수 없어요</span>`
+          : `<button onclick="toggleCatHidden(this.closest('[data-key]').dataset.key)"
+                     style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);cursor:pointer;color:var(--text2)">
+               ${c.hidden ? '🙈 숨김 — 다시 보이기' : '👁 보임 — 숨기기'}
+             </button>`}
+        ${c.custom ? `<button onclick="deleteCategory('${esc(c.id)}')"
+                     style="padding:4px 10px;font-size:11px;border:1px solid var(--expense);border-radius:6px;background:transparent;cursor:pointer;color:var(--expense)">🗑 삭제</button>` : ''}
+        ${c.label !== c.key ? `<span style="font-size:11px;color:var(--text3)">원래: ${esc(c.key)}</span>` : ''}
+      </div>
+      ${editingEmojiKey === c.key ? `
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+        ${CAT_EMOJI_PALETTE.map(e => `<span onclick="setCatEmoji(this.closest('[data-key]').dataset.key,'${e}')"
+           style="font-size:19px;width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;background:${e === c.emoji ? 'var(--accent)' : 'var(--bg2)'}">${e}</span>`).join('')}
+      </div>` : ''}
+    </div>`;
   };
-  box.innerHTML = section('expense', '지출') + section('income', '수입');
+
+  box.innerHTML = `
+    <div style="font-size:12px;color:var(--text2);font-weight:700;margin:14px 2px 4px">
+      ${type === 'expense' ? '지출' : '수입'} 카테고리 ${list.length}개
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin:0 2px 8px;line-height:1.5">
+      이름·이모지를 바꾸고, 순서를 옮기고, 안 쓰는 건 숨길 수 있어요.
+      숨기거나 이름을 바꿔도 <b>과거 기록은 그대로</b> 남아요.
+    </div>
+    ${list.map(row).join('')}`;
+}
+
+function toggleCatEmojiPicker(key) {
+  editingEmojiKey = (editingEmojiKey === key) ? null : key;
+  renderCatManageList();
+}
+
+// 아래 편집들은 categoryOverrides만 바꾼다(원래 key는 그대로). 바꾸는 즉시 서버에 저장해
+// "저장했나?" 헷갈리지 않게 하고, 화면 전체를 다시 그려 거래추가·예산 목록에도 바로 반영한다.
+function ovFor(type, key) {
+  const t = categoryOverrides[type] || (categoryOverrides[type] = { overrides: {}, order: [] });
+  if (!t.overrides) t.overrides = {};
+  return (t.overrides[key] = t.overrides[key] || {});
+}
+
+async function applyCatEdit() {
+  rebuildCategories();
+  renderCatManageList();
+  renderCategoryGrid(currentTxType);
+  renderCategoryGrids();
+  renderAll();
+  await saveCategoryOverrides();
+}
+
+async function setCatLabel(key, value) {
+  const v = String(value || '').trim().slice(0, 20);
+  const o = ovFor(newCatType, key);
+  if (!v || v === key) delete o.label; else o.label = v;   // 원래 이름과 같으면 덮어쓰기를 지운다
+  await applyCatEdit();
+}
+
+async function setCatEmoji(key, emoji) {
+  ovFor(newCatType, key).emoji = emoji;
+  editingEmojiKey = null;
+  await applyCatEdit();
+}
+
+async function toggleCatHidden(key) {
+  if (TAIL_KEYS.has(key)) return;
+  const o = ovFor(newCatType, key);
+  if (o.hidden) delete o.hidden; else o.hidden = 1;
+  await applyCatEdit();
+  showToast(o.hidden ? '🙈 숨겼어요 (과거 기록은 그대로예요)' : '👁 다시 보이게 했어요');
+}
+
+async function moveCat(key, dir) {
+  const t = categoryOverrides[newCatType] || (categoryOverrides[newCatType] = { overrides: {}, order: [] });
+  // 현재 화면 순서를 기준으로 order를 새로 쓴다(기타/기타수입은 늘 맨 끝이라 제외).
+  const cur = (CAT_ALL[newCatType] || []).filter(c => !TAIL_KEYS.has(c.key)).map(c => c.key);
+  const i = cur.indexOf(key);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= cur.length) return;
+  [cur[i], cur[j]] = [cur[j], cur[i]];
+  t.order = cur;
+  await applyCatEdit();
 }
 
 async function addCategory() {
@@ -1981,7 +2292,7 @@ function renderHomePage() {
   const maxAmt = sorted[0]?.[1] || 1;
   const monthStr = getMonthStr();
   const html = sorted.slice(0,6).map(([cat, amt]) => {
-    const emoji = [...CATEGORIES.expense,...CATEGORIES.income].find(c=>c.key===cat)?.emoji || '📦';
+    const emoji = catInfo(cat).emoji;
     const bud = budgets.find(b=>b.month===monthStr && b.category===cat);
     const budAmt = bud?.amount || 0;
     const pctBar = Math.min(100, Math.round((amt/maxAmt)*100));
@@ -2032,6 +2343,16 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
       <span style="color:var(--text3)">· 하루 평균 ${fmtMoney(Math.round(perDay))} · ${remain}일 남음</span>${vsPrev}</div>`);
   }
 
+  // ①-b 이번 달 통장에서 빠질 카드값. '쓴 달'과 '빠지는 달'이 달라서, 이게 진짜 이번 달 살림살이다.
+  const bills = cardBillsForMonth(currentYear, currentMonth).filter(b => b.total > 0);
+  if (bills.length) {
+    const sum = bills.reduce((s, b) => s + b.total, 0);
+    const soon = bills.map(b => `${esc(b.card.name)} ${b.payDate.slice(8)}일`).slice(0, 3).join(' · ');
+    lines.push(`<div style="font-size:12px;color:var(--text2);margin-top:6px;cursor:pointer" onclick="openCardBillsModal()">
+      💳 이번 달 나갈 카드값 <b>${fmtMoney(sum)}</b>
+      <span style="color:var(--text3)">· ${soon}${bills.length > 3 ? ' 외' : ''} · 자세히 ›</span></div>`);
+  }
+
   // ② 고정 vs 변동 (이번 달 자동등록된 정기지출이 있을 때만)
   const fixed = tx.filter(t => t.type === 'expense' && t.is_recurring).reduce((s, t) => s + t.amount, 0);
   if (fixed > 0) {
@@ -2052,7 +2373,7 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
     if (!big || Math.abs(d) > Math.abs(big.d)) big = { c, d, cur: catTotals[c] || 0, prv: prevCat[c] || 0 };
   }
   if (big && Math.abs(big.d) >= 10000) {
-    const emoji = [...CATEGORIES.expense, ...CATEGORIES.income].find(x => x.key === big.c)?.emoji || '📦';
+    const emoji = catInfo(big.c).emoji;
     const up = big.d > 0;
     const times = big.prv > 0 ? ` (${(big.cur / big.prv).toFixed(1)}배)` : '';
     changeEl.style.display = 'block';
@@ -2161,12 +2482,12 @@ function filterByCategory(el) {
 function renderTxItems(items) {
   if (!items.length) return '<div class="empty-state"><div class="empty-icon">📭</div><p>내역이 없어요</p></div>';
   return items.map(t => {
-    const cat = [...CATEGORIES.expense,...CATEGORIES.income].find(c=>c.key===t.category);
+    const cat = catInfo(t.category);
     return `<div class="tx-item" data-id="${esc(t.id)}" onclick="openDetail(this.dataset.id)">
-      <div class="tx-icon">${cat?.emoji||'📦'}</div>
+      <div class="tx-icon">${cat.emoji}</div>
       <div class="tx-info">
         <div class="tx-name">${esc(t.name)}</div>
-        <div class="tx-meta">${esc(t.category)} ${t.user_name?'· '+esc(t.user_name):''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}${instBadge(t)}${cardBadge(t)}</div>
+        <div class="tx-meta">${esc(cat.label)} ${t.user_name?'· '+esc(t.user_name):''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}${instBadge(t)}${cardBadge(t)}</div>
       </div>
       <div class="tx-amount ${t.type==='expense'?'expense':'income'}">${t.type==='expense'?'-':'+'}<span style="font-family:var(--font-mono)">${fmtMoney(t.amount)}</span></div>
       ${hasPhoto(t)?'<div class="tx-has-photo">📷</div>':''}
@@ -2230,10 +2551,10 @@ function renderBudgetPage() {
       const pct = Math.round((spent / b.amount) * 100);
       const cls = pct > 100 ? 'budget-over' : pct > 80 ? 'budget-warn' : 'budget-ok';
       const over = spent - b.amount;
-      const cat = CATEGORIES.expense.find(c=>c.key===b.category);
+      const cat = catInfo(b.category);   // 숨긴 카테고리에 예산이 걸려 있어도 조회는 되어야 한다
       html += `<div class="card" style="margin-bottom:10px">
         <div class="card-header">
-          <div style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--text)">${cat?.emoji||'📦'} ${esc(b.category)}</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--text)">${cat.emoji} ${esc(cat.label)}</div>
           <div style="font-size:11px;color:var(--${pct>100?'expense':'text3'});font-weight:${pct>100?'700':'400'}">${pct}%</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:8px">
@@ -2480,7 +2801,7 @@ function renderCategoryGrid(type) {
   el.innerHTML = cats.map(c => `
     <div class="cat-btn ${selectedCategory===c.key?'selected':''}" data-cat="${esc(c.key)}" onclick="selectCategory(this.dataset.cat)">
       <div class="cat-emoji">${esc(c.emoji)}</div>
-      <div class="cat-name">${esc(c.key)}</div>
+      <div class="cat-name">${esc(c.label || c.key)}</div>
     </div>
   `).join('');
 }
@@ -2493,7 +2814,8 @@ function selectCategory(key) {
 
 function renderCategoryGrids() {
   try {
-    const opts = CATEGORIES.expense.map(c=>`<option value="${esc(c.key)}">${esc(c.emoji)} ${esc(c.key)}</option>`).join('');
+    // value는 반드시 원래 key(거래에 저장되는 식별자), 보이는 글자만 label.
+    const opts = CATEGORIES.expense.map(c=>`<option value="${esc(c.key)}">${esc(c.emoji)} ${esc(c.label || c.key)}</option>`).join('');
     const sel = document.getElementById('budget-cat');
     if (sel) sel.innerHTML = opts;
     const rs = document.getElementById('rec-cat');
@@ -2731,13 +3053,13 @@ function openDetail(id) {
   const tx = transactions.find(t=>t.id===id);
   if (!tx) return;
   currentEditTx = tx;
-  const cat = [...CATEGORIES.expense,...CATEGORIES.income].find(c=>c.key===tx.category);
+  const cat = catInfo(tx.category);
   document.getElementById('detail-content').innerHTML = `
     <div style="text-align:center;margin-bottom:20px">
-      <div style="font-size:48px;margin-bottom:8px">${cat?.emoji||'📦'}</div>
+      <div style="font-size:48px;margin-bottom:8px">${cat.emoji}</div>
       <div style="font-size:20px;font-weight:700;color:var(--text)">${esc(tx.name)}</div>
       <div style="font-family:var(--font-mono);font-size:28px;font-weight:700;color:var(--${tx.type==='expense'?'expense':'income'});margin:8px 0">${tx.type==='expense'?'-':'+'} ${fmtMoney(tx.amount)}</div>
-      <div style="font-size:12px;color:var(--text3)">${esc(tx.date)} · ${esc(tx.category)} ${tx.user_name?'· '+esc(tx.user_name):''}</div>
+      <div style="font-size:12px;color:var(--text3)">${esc(tx.date)} · ${esc(cat.label)} ${tx.user_name?'· '+esc(tx.user_name):''}</div>
       <div style="margin-top:6px">${instBadge(tx)}${cardBadge(tx)}</div>
     </div>
     ${instCard(tx)}
@@ -2892,14 +3214,14 @@ function renderTrashList(items) {
     return;
   }
   list.innerHTML = items.map(t => {
-    const cat = [...CATEGORIES.expense, ...CATEGORIES.income].find(c => c.key === t.category);
+    const cat = catInfo(t.category);
     const when = deletedAgo(t.deleted_at);
     // id는 dataset로만 넘긴다(onclick 문자열에 넣지 않는다 — 코드 전반의 규칙).
     return `<div class="tx-item" data-id="${esc(t.id)}" style="cursor:default">
-      <div class="tx-icon">${cat?.emoji || '📦'}</div>
+      <div class="tx-icon">${cat.emoji}</div>
       <div class="tx-info">
         <div class="tx-name">${esc(t.name)} <span style="color:var(--text3);font-weight:400">${t.type==='expense'?'-':'+'}${fmtMoney(t.amount)}</span></div>
-        <div class="tx-meta">${esc(t.date)} · ${esc(t.category)}${when ? ' · ' + when : ''}${instBadge(t)}</div>
+        <div class="tx-meta">${esc(t.date)} · ${esc(cat.label)}${when ? ' · ' + when : ''}${instBadge(t)}</div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
         <button class="btn-secondary" style="padding:6px 10px;font-size:12px;margin:0;width:auto"
@@ -4057,7 +4379,7 @@ function openMonthlyReport() {
     <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">📊 카테고리별 지출</div>
     ${sortedCats.map(([cat,amt]) => {
       const pct = expense > 0 ? Math.round((amt/expense)*100) : 0;
-      const emoji = [...CATEGORIES.expense,...CATEGORIES.income].find(c=>c.key===cat)?.emoji||'📦';
+      const emoji = catInfo(cat).emoji;
       return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <div style="width:28px;text-align:center">${emoji}</div>
         <div style="flex:1">

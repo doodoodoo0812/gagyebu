@@ -669,6 +669,30 @@ export default {
       // 카테고리 편집(숨김/이름/이모지/순서) 오버라이드. 두 폰이 공유해야 하므로 서버(app_settings)에 둔다
       // (localStorage 금지 — 정기지출 규칙을 같은 이유로 서버로 옮긴 전례). 내장 카테고리는 클라이언트
       // 상수라, 여기엔 '덮어쓰기'만 JSON 한 덩어리로 담는다. 거래에 저장된 category(원래 key)는 안 건드린다.
+      // ── 카드 설정(결제일·이용 시작일) ──
+      //  한국 카드는 '쓴 달'과 '통장에서 빠지는 달'이 다르다. 카드마다 이용기간 시작일과 결제일이
+      //  달라서, 이 둘을 알아야 "이번 달 실제로 나갈 돈"을 계산할 수 있다.
+      //  스키마 변경 없이 app_settings에 JSON 한 덩어리로 둔다(부부가 공유해야 하므로 서버).
+      if (path === '/api/settings/cards' && request.method === 'GET') {
+        const raw = await getSetting(env, 'card_settings');
+        return json({ cards: raw ? safeParse(raw) : null });
+      }
+      if (path === '/api/settings/cards' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const src = Array.isArray(b?.cards) ? b.cards : [];
+        const out = [];
+        for (const c of src.slice(0, 30)) {
+          const name = String(c?.name ?? '').trim().slice(0, 20);
+          const pay = Number(c?.payDay), start = Number(c?.startDay);
+          if (!name) continue;
+          if (!Number.isInteger(pay) || pay < 1 || pay > 31) continue;
+          if (!Number.isInteger(start) || start < 1 || start > 31) continue;
+          out.push({ name, payDay: pay, startDay: start, owner: String(c?.owner ?? '').slice(0, 40) });
+        }
+        await setSetting(env, 'card_settings', JSON.stringify(out));
+        return json({ ok: true, cards: out });
+      }
+
       if (path === '/api/settings/categories' && request.method === 'GET') {
         const raw = await getSetting(env, 'category_overrides');
         return json({ overrides: raw ? safeParse(raw) : null });
@@ -993,6 +1017,7 @@ export default {
         const rec = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules`).all();
         const cat = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories`).all();
         const catOv = await getSetting(env, 'category_overrides');
+        const cardSet = await getSetting(env, 'card_settings');
         return json({
           version: 1,
           exported_at: new Date().toISOString(),
@@ -1001,6 +1026,7 @@ export default {
           recurring_rules: rec.results ?? [],
           categories: cat.results ?? [],
           category_overrides: catOv ? safeParse(catOv) : null,
+          card_settings: cardSet ? safeParse(cardSet) : null,
         });
       }
 
@@ -1056,6 +1082,9 @@ export default {
           } catch (e) {}
         }
         // 카테고리 편집(숨김/이름/순서). 백업에 있으면 되살린다 — 안 그러면 복원 한 번에 편집이 날아간다.
+        if (Array.isArray(b?.card_settings)) {
+          try { await setSetting(env, 'card_settings', JSON.stringify(b.card_settings)); } catch (e) {}
+        }
         if (b?.category_overrides && typeof b.category_overrides === 'object') {
           try { await setSetting(env, 'category_overrides', JSON.stringify(cleanCategoryOverrides(b.category_overrides))); } catch (e) {}
         }
