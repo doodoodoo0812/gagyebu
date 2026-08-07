@@ -103,6 +103,17 @@ CREATE TABLE login_attempts (
 );
 CREATE INDEX idx_login_at ON login_attempts(at);
 
+-- 개인 계정. 예전엔 부부가 공유 비밀번호 하나(APP_PASSWORD)로 로그인했지만, 이제 각자 이름+비밀번호로
+-- 계정을 만든다. 예전 공유 비밀번호는 '가입 코드'가 되어 계정을 만들 때만 쓴다. 가계부 데이터는 그대로 공유.
+-- 비밀번호는 원문을 저장하지 않고 계정마다 무작위 salt로 PBKDF2-SHA256(150,000회) 해시만 담는다.
+CREATE TABLE users (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 40),
+  salt       TEXT NOT NULL,
+  hash       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- 사용자 카테고리. 내장 카테고리는 앱(클라이언트)에 있고, 여기엔 사용자가 추가한 것만 담는다.
 -- 거래의 category는 문자열이라, 카테고리를 지워도 기존 거래는 그 이름 그대로 남는다(앱이 📦로 그린다).
 CREATE TABLE categories (

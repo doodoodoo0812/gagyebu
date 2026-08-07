@@ -28,7 +28,7 @@ npx wrangler d1 execute gagyebu --remote --file=schema.sql   # 스키마(새 DB 
 ## 2. 비밀값 (값은 코드·저장소에 없음. Cloudflare secret에만)
 | 이름 | 역할 | 바꾸면 |
 |---|---|---|
-| `APP_PASSWORD` | 부부 공유 로그인 비번 | 이미 로그인된 폰은 유지, 새 로그인만 새 비번 |
+| `APP_PASSWORD` | **가입 코드**(개인 계정 전환 26-08-08). 계정 만들 때만 사용 | 새 계정 만들 때만 새 코드. 기존 계정 로그인엔 영향 없음 |
 | `SESSION_SECRET` | 세션 토큰 서명키 | 모든 기기 즉시 로그아웃 |
 | `GEMINI_API_KEY` | 영수증 AI(선택) | 앱 설정에서도 넣을 수 있음(서버 저장). 없으면 AI만 꺼짐 |
 

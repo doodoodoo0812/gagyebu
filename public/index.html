@@ -533,6 +533,10 @@ body {
 .login-title { font-size: 22px; font-weight: 700; color: var(--text); }
 .login-sub { font-size: 14px; color: var(--text2); line-height: 1.6; }
 .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; width: 100%; }
+/* 로그인/계정만들기 탭 */
+.auth-tabs { display: flex; gap: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; margin-bottom: 18px; }
+.auth-tab { flex: 1; border: none; background: transparent; color: var(--text3); font-size: 14px; font-weight: 700; padding: 9px 0; border-radius: calc(var(--radius-sm) - 3px); cursor: pointer; transition: background .15s, color .15s; }
+.auth-tab.active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 
 /* SMS Parser */
 /* contenteditable에는 placeholder 속성이 안 먹는다. 비어있을 때만 안내문을 그린다.
@@ -641,19 +645,30 @@ body {
 <div id="login-screen" class="login-screen">
   <div class="login-logo">💰</div>
   <div class="login-title">우리집 가계부</div>
-  <p class="login-sub">부부가 함께 쓰는 가계부<br>비밀번호를 넣으면 서로 자동으로 공유돼요</p>
+  <p class="login-sub">부부가 함께 쓰는 가계부<br>각자 이름·비밀번호로 로그인해요 · 가계부는 서로 공유돼요</p>
   <div class="login-card">
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab active" id="tab-login" onclick="setAuthMode('login')">로그인</button>
+      <button type="button" class="auth-tab" id="tab-signup" onclick="setAuthMode('signup')">계정 만들기</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">이름</label>
+      <input class="form-input" id="login-name" placeholder="예: 남편, 아내" autocomplete="username"
+             autocapitalize="off" onkeydown="if(event.key==='Enter')submitAuth()">
+    </div>
     <div class="form-group">
       <label class="form-label">비밀번호</label>
-      <input class="form-input" id="login-password" type="password" placeholder="우리집 비밀번호"
-             autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+      <input class="form-input" id="login-password" type="password" placeholder="내 비밀번호"
+             autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuth()">
     </div>
-    <div class="form-group">
-      <label class="form-label">내 이름 (거래에 표시돼요)</label>
-      <input class="form-input" id="login-name" placeholder="예: 남편, 아내" autocomplete="nickname"
-             onkeydown="if(event.key==='Enter')login()">
+    <div class="form-group" id="signup-code-group" style="display:none">
+      <label class="form-label">가입 코드</label>
+      <input class="form-input" id="signup-code" type="password" placeholder="우리집 공용 코드" autocomplete="off"
+             autocapitalize="off" onkeydown="if(event.key==='Enter')submitAuth()">
+      <div style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.5">
+        예전에 함께 쓰던 '우리집 비밀번호'예요. 계정을 <b>처음 만들 때 한 번만</b> 필요해요.</div>
     </div>
-    <button class="btn-primary" id="login-btn" onclick="login()">🔓 들어가기</button>
+    <button class="btn-primary" id="login-btn" onclick="submitAuth()">🔓 들어가기</button>
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
       <div style="font-size:12px;color:var(--text3);margin-bottom:8px">먼저 둘러보고 싶다면</div>
       <button class="btn-secondary" onclick="useDemoMode()" style="margin-top:0">⚡ 데모 모드로 시작</button>
@@ -667,8 +682,8 @@ body {
   <div class="topbar">
     <div class="topbar-title">💰 가계부</div>
     <div class="topbar-actions">
-      <!-- 테마 입구는 설정 한 곳으로 일원화(테마는 한 번 정하면 끝). 상단바는 동기화만. -->
-      <div class="icon-btn" id="sync-btn" onclick="syncData()" title="동기화">🔄</div>
+      <!-- 테마 입구는 설정 한 곳으로 일원화(테마는 한 번 정하면 끝). 상단바는 새로고침만. -->
+      <div class="icon-btn" id="sync-btn" onclick="syncData()" title="새로고침 — 최신 내용 다시 불러오기">🔄</div>
     </div>
   </div>
 
@@ -808,12 +823,12 @@ body {
 
     <div class="settings-section">
       <div class="settings-title">연결</div>
-      <div class="settings-item" onclick="openUserModal()">
+      <div class="settings-item" onclick="openPassModal()">
         <div class="settings-item-left">
           <div class="settings-item-icon">👤</div>
           <div>
-            <div class="settings-item-text" id="username-display">내 이름 설정</div>
-            <div class="settings-item-sub">거래에 이름이 표시돼요</div>
+            <div class="settings-item-text" id="username-display">내 계정</div>
+            <div class="settings-item-sub">비밀번호를 바꿀 수 있어요</div>
           </div>
         </div>
         <div class="settings-item-right">›</div>
@@ -1201,12 +1216,17 @@ body {
     <p style="font-size:13px;color:var(--text2);line-height:1.6;margin:0 0 14px">
       Google AI Studio에서 <b>무료</b> API 키를 받아 넣으면, 영수증을 찍었을 때 금액·가게명을 자동으로 읽어줘요.<br>
       <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
-         style="color:var(--accent);text-decoration:none">aistudio.google.com/apikey →</a>
+         style="color:var(--accent);text-decoration:none">aistudio.google.com/apikey →</a><br>
+      <span style="color:var(--text3)"><b>AIza…</b> 로 시작하는 키를 넣어 주세요.
+      <b>AQ.…</b> 로 시작하는 값은 구글이 API 키로 받지 않아 쓸 수 없어요 —
+      키를 만들 때 <b>기존 Google Cloud 프로젝트를 선택</b>하면 AIza 키가 나옵니다.</span>
     </p>
     <div class="form-group">
       <label class="form-label">Gemini API 키</label>
-      <input class="form-input" id="ai-key-input" type="password" placeholder="AIza..."
-             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <input class="form-input" id="ai-key-input" type="password" placeholder="AIza… 로 시작하는 키"
+             autocomplete="off" autocapitalize="off" spellcheck="false"
+             oninput="hintAiKeyFormat()">
+      <div id="ai-key-hint" style="font-size:11px;margin-top:6px;display:none"></div>
     </div>
     <div id="ai-modal-status" style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.6"></div>
     <button class="btn-primary" id="ai-save-btn" onclick="saveAiKey()">저장하고 자동 설정</button>
@@ -1285,17 +1305,27 @@ body {
   </div>
 </div>
 
-<!-- USER NAME MODAL -->
-<div class="modal-backdrop" id="user-modal">
+<!-- PASSWORD CHANGE MODAL -->
+<div class="modal-backdrop" id="pass-modal">
   <div class="modal">
     <div class="modal-handle"></div>
-    <div class="modal-title">내 이름 설정</div>
+    <div class="modal-title">비밀번호 변경</div>
+    <div id="pass-account-line" style="font-size:13px;color:var(--text2);margin-bottom:14px"></div>
     <div class="form-group">
-      <label class="form-label">이름</label>
-      <input class="form-input" id="username-input" placeholder="예: 남편, 아내">
+      <label class="form-label">현재 비밀번호</label>
+      <input class="form-input" id="pass-current" type="password" autocomplete="current-password">
     </div>
-    <button class="btn-primary" onclick="saveUsername()">저장</button>
-    <button class="btn-secondary" onclick="closeModal('user-modal')">취소</button>
+    <div class="form-group">
+      <label class="form-label">새 비밀번호 (4자 이상)</label>
+      <input class="form-input" id="pass-new" type="password" autocomplete="new-password">
+    </div>
+    <div class="form-group">
+      <label class="form-label">새 비밀번호 확인</label>
+      <input class="form-input" id="pass-new2" type="password" autocomplete="new-password"
+             onkeydown="if(event.key==='Enter')changePassword()">
+    </div>
+    <button class="btn-primary" id="pass-save-btn" onclick="changePassword()">변경하기</button>
+    <button class="btn-secondary" onclick="closeModal('pass-modal')">취소</button>
   </div>
 </div>
 
@@ -1349,19 +1379,65 @@ const BUILTIN_CATEGORIES = {
   ]
 };
 let customCategories = [];   // 사용자 추가 카테고리 {id,type,name,emoji}
-// 실사용 카테고리 = 내장 + 사용자. 렌더는 전부 이 CATEGORIES를 읽으므로, rebuild하면 전 화면에 반영된다.
+// 내장 카테고리 편집(숨김/이름/이모지/순서) 덮어쓰기. 서버(app_settings)에서 불러오며 두 폰이 공유한다.
+// 구조: { expense:{overrides:{ "<key>":{hidden,label,emoji} }, order:["<key>",...]}, income:{...} }
+// 핵심: 키(원래 이름)는 정체성이라 절대 안 바꾼다 — 거래에 그 key가 저장돼 있어, 이름변경은 '표시'만이다.
+let categoryOverrides = { expense: { overrides: {}, order: [] }, income: { overrides: {}, order: [] } };
+const TAIL_KEYS = new Set(['기타', '기타수입']);   // 미매칭 폴백 — 숨기기·이동 금지, 늘 맨 끝
+// 실사용(화면에 그릴) 카테고리 = 내장 + 사용자, 숨김 제외·순서 반영. 렌더는 전부 이 CATEGORIES를 읽는다.
 let CATEGORIES = { expense: [...BUILTIN_CATEGORIES.expense], income: [...BUILTIN_CATEGORIES.income] };
-function rebuildCategories() {
-  const tailKeys = new Set(['기타', '기타수입']);   // '기타/기타수입'은 늘 맨 끝으로
-  const merge = (type) => {
-    const head = BUILTIN_CATEGORIES[type].filter(c => !tailKeys.has(c.key));
-    const tail = BUILTIN_CATEGORIES[type].filter(c => tailKeys.has(c.key));
-    const custom = customCategories.filter(c => c.type === type)
-      .map(c => ({ key: c.name, emoji: c.emoji, id: c.id, custom: true }));
-    return [...head, ...custom, ...tail];
-  };
-  CATEGORIES = { expense: merge('expense'), income: merge('income') };
+// 숨긴 것까지 포함한 '전체 목록'(관리 화면용)과 '조회 맵'(과거 거래의 이모지·이름 표시용).
+let CAT_ALL = { expense: [], income: [] };
+let CAT_LOOKUP = {};   // key -> { key, label, emoji }
+
+function normalizeOverrides(o) {
+  const out = { expense: { overrides: {}, order: [] }, income: { overrides: {}, order: [] } };
+  for (const t of ['expense', 'income']) {
+    const s = (o && typeof o === 'object' && o[t]) || {};
+    out[t].overrides = (s.overrides && typeof s.overrides === 'object') ? s.overrides : {};
+    out[t].order = Array.isArray(s.order) ? s.order : [];
+  }
+  return out;
 }
+
+function rebuildCategories() {
+  const ov = categoryOverrides || {};
+  CAT_LOOKUP = {};
+  const buildType = (type) => {
+    const ot = (ov[type] && typeof ov[type] === 'object') ? ov[type] : { overrides: {}, order: [] };
+    const orMap = ot.overrides || {};
+    const order = Array.isArray(ot.order) ? ot.order : [];
+    const base = [
+      ...BUILTIN_CATEGORIES[type].map(c => ({ key: c.key, emoji: c.emoji, custom: false })),
+      ...customCategories.filter(c => c.type === type).map(c => ({ key: c.name, emoji: c.emoji, id: c.id, custom: true })),
+    ];
+    const withOv = base.map(c => {
+      const o = orMap[c.key] || {};
+      const item = {
+        key: c.key,
+        label: (o.label && String(o.label)) || c.key,
+        emoji: (o.emoji && String(o.emoji)) || c.emoji,
+        hidden: !!o.hidden && !TAIL_KEYS.has(c.key),   // 기타/기타수입은 숨기기 금지
+        custom: c.custom, id: c.id,
+      };
+      CAT_LOOKUP[c.key] = { key: c.key, label: item.label, emoji: item.emoji };   // 숨겨도 조회는 살아있게
+      return item;
+    });
+    // 순서: order 배열 우선, order에 없으면 원래 순서 유지(안정 정렬), 기타/기타수입은 늘 맨 끝.
+    const tail = withOv.filter(c => TAIL_KEYS.has(c.key));
+    const rest = withOv.filter(c => !TAIL_KEYS.has(c.key));
+    const idx = (k) => { const i = order.indexOf(k); return i < 0 ? Infinity : i; };
+    rest.sort((a, b) => idx(a.key) - idx(b.key));
+    return [...rest, ...tail];
+  };
+  CAT_ALL = { expense: buildType('expense'), income: buildType('income') };
+  CATEGORIES = {
+    expense: CAT_ALL.expense.filter(c => !c.hidden),
+    income: CAT_ALL.income.filter(c => !c.hidden),
+  };
+}
+// 카테고리 조회(숨김 포함). 표시 이름은 label, 이모지는 emoji. 없으면 원문/📦.
+function catInfo(key) { return CAT_LOOKUP[key] || { key, label: key, emoji: '📦' }; }
 
 const THEMES = [
   { key:'cream', name:'크림', colors:['#f6f2e9','#4c63b6'], desc:'따뜻한 미색, 눈이 편한 기본' },
@@ -1413,12 +1489,20 @@ async function initApp() {
       }
     }
 
-    hideAllScreens();
-    document.getElementById('login-screen').style.display = 'flex';
+    showLoginScreen();
   } catch(e) {
-    hideAllScreens();
-    document.getElementById('login-screen').style.display = 'flex';
+    showLoginScreen();
   }
+}
+
+// 로그인 화면을 띄우고, 계정이 하나도 없으면 '계정 만들기'를 먼저 보여준다(첫 사용자 안내).
+async function showLoginScreen() {
+  hideAllScreens();
+  document.getElementById('login-screen').style.display = 'flex';
+  try {
+    const s = await api('/auth/status');
+    setAuthMode(s?.hasUsers ? 'login' : 'signup');
+  } catch(e) { setAuthMode('login'); }
 }
 
 document.addEventListener("DOMContentLoaded", () => { setTimeout(initApp, 300); });
@@ -1429,8 +1513,7 @@ function loadSettings() {
   syncThemeColor();
   demoMode = localStorage.getItem('demoMode') === 'true';
   const userName = localStorage.getItem('userName') || '';
-  document.getElementById('username-display').textContent = userName || '내 이름 설정';
-  document.getElementById('username-input').value = userName;
+  document.getElementById('username-display').textContent = userName || '내 계정';
   // 정기 지출 규칙은 이제 서버에 있다(loadData가 받아온다). 데모 모드만 로컬을 쓴다.
   if (demoMode) recurringItems = JSON.parse(localStorage.getItem('recurring') || '[]');
   // 예산 알림 토글 상태 복원. 이게 없으면 껐어도 앱을 다시 열 때마다 켜진 상태로 되돌아간다.
@@ -1455,8 +1538,8 @@ async function api(path, { method = 'GET', body } = {}) {
   });
   let data = null;
   try { data = await res.json(); } catch(e) {}
-  // 토큰 만료/무효는 로그인으로 되돌린다. (로그인 요청 자체의 401은 '비밀번호 틀림'이므로 제외)
-  if (res.status === 401 && path !== '/login') {
+  // 토큰 만료/무효는 로그인으로 되돌린다. (로그인·가입 요청 자체의 401은 '비번/코드 틀림'이므로 제외)
+  if (res.status === 401 && path !== '/login' && path !== '/signup') {
     authToken = null;
     localStorage.removeItem('auth_token');
     // 여기서 화면도 로그인으로 돌려줘야 한다. 안 그러면 저장/삭제 중 토큰이 만료된 경우
@@ -1469,26 +1552,64 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
+// 로그인 화면 모드: 'login'(이름+비번) / 'signup'(이름+비번+가입코드)
+let authMode = 'login';
+function setAuthMode(mode) {
+  authMode = (mode === 'signup') ? 'signup' : 'login';
+  document.getElementById('tab-login').classList.toggle('active', authMode === 'login');
+  document.getElementById('tab-signup').classList.toggle('active', authMode === 'signup');
+  document.getElementById('signup-code-group').style.display = authMode === 'signup' ? '' : 'none';
+  document.getElementById('login-btn').textContent = authMode === 'signup' ? '✨ 계정 만들기' : '🔓 들어가기';
+  document.getElementById('login-password').setAttribute('autocomplete', authMode === 'signup' ? 'new-password' : 'current-password');
+}
+
+function submitAuth() { return authMode === 'signup' ? signup() : login(); }
+
+// 로그인/가입 성공 뒤 공통 처리 — 토큰 저장 후 앱 진입.
+function afterAuth(r) {
+  authToken = r.token;
+  localStorage.setItem('auth_token', r.token);
+  if (r.name) localStorage.setItem('userName', r.name);   // 이름의 정본은 서버가 돌려준 계정 이름
+  demoMode = false;
+  localStorage.setItem('demoMode', 'false');
+  document.getElementById('login-password').value = '';
+  const code = document.getElementById('signup-code'); if (code) code.value = '';
+  loadSettings();
+  showApp();
+}
+
 async function login() {
-  const pw = document.getElementById('login-password').value;
   const name = document.getElementById('login-name').value.trim();
+  const pw = document.getElementById('login-password').value;
+  if (!name) { showToast('이름을 입력해 주세요'); return; }
   if (!pw) { showToast('비밀번호를 입력해 주세요'); return; }
   const btn = document.getElementById('login-btn');
   btn.disabled = true; btn.textContent = '확인 중…';
   try {
-    const r = await api('/login', { method: 'POST', body: { password: pw, name } });
-    authToken = r.token;
-    localStorage.setItem('auth_token', r.token);
-    if (name) localStorage.setItem('userName', name);
-    demoMode = false;
-    localStorage.setItem('demoMode', 'false');
-    document.getElementById('login-password').value = '';
-    loadSettings();
-    showApp();
+    afterAuth(await api('/login', { method: 'POST', body: { name, password: pw } }));
   } catch(e) {
     showToast('❌ ' + e.message);
   } finally {
     btn.disabled = false; btn.textContent = '🔓 들어가기';
+  }
+}
+
+async function signup() {
+  const name = document.getElementById('login-name').value.trim();
+  const pw = document.getElementById('login-password').value;
+  const code = document.getElementById('signup-code').value;
+  if (!name) { showToast('이름을 입력해 주세요'); return; }
+  if (pw.length < 4) { showToast('비밀번호는 4자 이상으로 정해 주세요'); return; }
+  if (!code) { showToast('가입 코드를 입력해 주세요'); return; }
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true; btn.textContent = '만드는 중…';
+  try {
+    afterAuth(await api('/signup', { method: 'POST', body: { name, password: pw, code } }));
+    showToast('✅ 계정을 만들었어요');
+  } catch(e) {
+    showToast('❌ ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = authMode === 'signup' ? '✨ 계정 만들기' : '🔓 들어가기';
   }
 }
 
@@ -1755,11 +1876,14 @@ async function deleteCategory(id) {
   showToast('🗑️ 삭제했어요');
 }
 
+// 상단 🔄 = 새로고침. 서버에서 최신 내용을 다시 불러온다(배우자가 다른 폰에서 넣은 것도 이때 들어온다).
+// 예전엔 '동기화'라고 불렀는데, 무슨 기능인지 안 통했다. 하는 일 그대로 '새로고침'이라고 부른다.
 async function syncData() {
-  document.getElementById('sync-btn').textContent = '⏳';
+  const btn = document.getElementById('sync-btn');
+  btn.textContent = '⏳';
   await loadData();
-  document.getElementById('sync-btn').textContent = '🔄';
-  showToast('✅ 동기화 완료');
+  btn.textContent = '🔄';
+  showToast('✅ 새로고침 완료 — 최신 내용을 불러왔어요');
 }
 
 // ===== RENDER =====
@@ -3128,13 +3252,31 @@ function updateMonthLabel() {
   });
 }
 
-function openUserModal() { openModal('user-modal'); }
-function saveUsername() {
-  const name = document.getElementById('username-input').value.trim();
-  localStorage.setItem('userName', name);
-  document.getElementById('username-display').textContent = name || '내 이름 설정';
-  closeModal('user-modal');
-  showToast('✅ 이름 저장 완료');
+function openPassModal() {
+  if (demoMode) { showToast('데모 모드에는 계정이 없어요'); return; }
+  const name = localStorage.getItem('userName') || '';
+  document.getElementById('pass-account-line').textContent = name ? `내 계정: ${name}` : '';
+  ['pass-current','pass-new','pass-new2'].forEach(id => { document.getElementById(id).value = ''; });
+  openModal('pass-modal');
+}
+async function changePassword() {
+  const cur = document.getElementById('pass-current').value;
+  const nw = document.getElementById('pass-new').value;
+  const nw2 = document.getElementById('pass-new2').value;
+  if (!cur) { showToast('현재 비밀번호를 입력해 주세요'); return; }
+  if (nw.length < 4) { showToast('새 비밀번호는 4자 이상으로 정해 주세요'); return; }
+  if (nw !== nw2) { showToast('새 비밀번호가 서로 달라요'); return; }
+  const btn = document.getElementById('pass-save-btn');
+  btn.disabled = true; btn.textContent = '변경 중…';
+  try {
+    await api('/password', { method: 'POST', body: { current: cur, next: nw } });
+    closeModal('pass-modal');
+    showToast('✅ 비밀번호를 바꿨어요');
+  } catch(e) {
+    showToast('❌ ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '변경하기';
+  }
 }
 
 function showToast(msg) {
@@ -3172,6 +3314,7 @@ async function openAiModal() {
   if (demoMode) { showToast('데모 모드에선 설정할 수 없어요'); return; }
   if (!authToken) { showToast('로그인이 필요해요'); return; }
   document.getElementById('ai-key-input').value = '';
+  document.getElementById('ai-key-hint').style.display = 'none';
   const box = document.getElementById('ai-modal-status');
   box.textContent = '확인 중…';
   openModal('ai-modal');
@@ -3179,6 +3322,25 @@ async function openAiModal() {
   box.innerHTML = s?.configured
     ? `현재: ${esc(aiStatusText(s))}<br>바꾸려면 새 키를 넣고 저장하세요.`
     : '아직 키가 없어요. 키를 넣으면 쓸 수 있는 모델을 자동으로 찾아 설정합니다.';
+}
+
+// 키를 붙여넣는 즉시 형식을 알려준다. 구글에 물어보고 나서야 "안 된다"고 하면
+// 사용자는 뭘 잘못했는지 모른 채 같은 값을 계속 다시 넣게 된다(실제로 그런 일이 있었다).
+function hintAiKeyFormat() {
+  const el = document.getElementById('ai-key-hint');
+  const v = document.getElementById('ai-key-input').value.trim();
+  if (!v) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  if (v.startsWith('AQ.')) {
+    el.style.color = 'var(--expense)';
+    el.textContent = '⚠️ AQ.로 시작하는 값은 Gemini API 키가 아니에요. AI Studio에서 AIza로 시작하는 키를 만들어 주세요.';
+  } else if (v.startsWith('AIza')) {
+    el.style.color = 'var(--income)';
+    el.textContent = '✅ 형식이 맞아요. 저장하면 실제로 되는 키인지 확인합니다.';
+  } else {
+    el.style.color = 'var(--text3)';
+    el.textContent = 'Gemini API 키는 보통 AIza로 시작해요. 앞뒤가 잘리지 않았는지 확인해 주세요.';
+  }
 }
 
 async function saveAiKey() {
@@ -3193,6 +3355,7 @@ async function saveAiKey() {
     // 안 그러면 오타난 키가 저장되고, 나중에 영수증 찍을 때가 되어서야 실패해 원인을 알기 어렵다.
     const r = await api('/settings/gemini', { method: 'POST', body: { key } });
     document.getElementById('ai-key-input').value = '';
+  document.getElementById('ai-key-hint').style.display = 'none';
     box.innerHTML = `✅ 설정 완료 — 모델 <b>${esc(r.model)}</b>을(를) 자동으로 골랐어요.` +
       (r.candidates?.length > 1 ? `<br><span style="color:var(--text3)">후보: ${esc(r.candidates.slice(0,4).join(', '))}</span>` : '');
     showToast('✅ AI 인식 설정 완료');
@@ -3356,13 +3519,20 @@ function extractPaymentInfo(text) {
     .replace(/\d+개월/g, ' ')
     .replace(/\(\d+\)/g, ' ');                                     // 카드 뒷자리
 
-  const tokens = cleaned.split(/\s+/).map(t => t.trim()).filter(Boolean)
-    .filter(t => !SMS_NOISE.has(t))
-    .filter(t => !SMS_ISSUER.test(t))
-    .filter(t => !/^\d+$/.test(t));
-
-  let name = tokens.length ? tokens[tokens.length - 1] : '';   // 맨 끝이 가게명, 그 앞은 보통 카드 주인 이름
-  name = name.replace(/(에서|에게)$/, '');
+  // 예전엔 '마지막 한 토큰'만 가게명으로 써서 '스타벅스 동래점'이 '동래점'으로,
+  // 'GS25 연산동점'이 '연산동점'으로 잘렸다. 이제 끝에서부터 '경계가 아닌 토큰'이
+  // 이어지는 구간을 통째로 이어붙여 여러 어절 가게명을 살린다.
+  // 경계 = 노이즈 단어 / 카드사·은행 / 순수 숫자 / 카드 주인 이름(마스킹 '*'·존칭 '님').
+  const allTokens = cleaned.split(/\s+/).map(t => t.trim()).filter(Boolean);
+  const isBoundary = (t) =>
+    SMS_NOISE.has(t) || SMS_ISSUER.test(t) || /^\d+$/.test(t) ||
+    t.includes('*') || /님$/.test(t);
+  let end = allTokens.length;
+  while (end > 0 && isBoundary(allTokens[end - 1])) end--;        // 가게명 뒤 경계 토큰 스킵
+  let start = end;
+  while (start > 0 && !isBoundary(allTokens[start - 1])) start--; // 이어지는 가게명 토큰만큼 앞으로
+  let name = allTokens.slice(start, end).join(' ');
+  name = name.replace(/(에서|에게)$/, '').trim();
   if (name.length > 30) name = name.slice(0, 30);
 
   // ===== 카테고리 =====

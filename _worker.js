@@ -62,9 +62,50 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-async function issueToken(name, secret) {
-  const payload = b64url(enc.encode(JSON.stringify({ n: String(name || '').slice(0, 40), exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SEC })));
+// user는 문자열(옛 방식·이름만) 또는 {id, name}. 개인 계정으로 바뀌며 토큰에 계정 id(u)를 함께 담는다.
+// u가 있어야 비밀번호 변경 등 '이 계정' 대상 동작을 할 수 있다(이름은 바뀔 수 있으니 id가 진짜 신원).
+async function issueToken(user, secret) {
+  const u = (user && typeof user === 'object') ? user : { name: user };
+  const payload = b64url(enc.encode(JSON.stringify({
+    u: u.id || null,
+    n: String(u.name || '').slice(0, 40),
+    exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SEC,
+  })));
   return `${payload}.${await hmac(payload, secret)}`;
+}
+
+// ───────── 비밀번호 해시 (PBKDF2-SHA256) ─────────
+// 원문은 저장하지 않는다. 계정마다 무작위 salt로 15만회 파생한 해시만 users에 담고,
+// 로그인 때 같은 salt로 다시 파생해 상수시간 비교(safeEqual)한다.
+const PBKDF2_ITERS = 150000;
+const bytesToHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+function hexToBytes(hex) {
+  const s = String(hex || '');
+  const out = new Uint8Array(Math.floor(s.length / 2));
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.substr(i * 2, 2), 16);
+  return out;
+}
+async function hashPassword(password, saltHex) {
+  const salt = saltHex ? hexToBytes(saltHex) : crypto.getRandomValues(new Uint8Array(16));
+  const km = await crypto.subtle.importKey('raw', enc.encode(String(password)), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: PBKDF2_ITERS, hash: 'SHA-256' }, km, 256);
+  return { salt: bytesToHex(salt), hash: bytesToHex(bits) };
+}
+
+// 로그인·가입 공용 레이트리밋. IP별 최근 10분 시도를 세어 임계 초과면 true(차단).
+// append-only INSERT 후 카운트라 병렬 요청도 각자 한 건씩 쌓여 throttle을 못 피한다.
+// (지연 400ms는 요청 안에서만 걸려 병렬 공격엔 무력하므로, 실제 방어는 이 카운터다.)
+async function throttleLogin(env, request) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'local';
+  const now = Date.now();
+  const WINDOW = 10 * 60 * 1000, LIMIT = 10;   // 10분에 10회
+  try {
+    await env.DB.prepare(`DELETE FROM login_attempts WHERE at < ?1`).bind(now - WINDOW).run();
+    await env.DB.prepare(`INSERT INTO login_attempts (ip, at) VALUES (?1, ?2)`).bind(ip, now).run();
+    const c = await env.DB.prepare(`SELECT COUNT(*) AS n FROM login_attempts WHERE ip = ?1 AND at > ?2`)
+                          .bind(ip, now - WINDOW).first();
+    return (c?.n || 0) > LIMIT;
+  } catch (e) { return false; /* 카운터 실패가 로그인을 막지는 않게 한다 */ }
 }
 
 // 유효하면 payload, 아니면 null
@@ -150,6 +191,33 @@ async function setSetting(env, key, value) {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
   ).bind(key, value).run();
 }
+function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+// 카테고리 편집(숨김/이름/이모지/순서) 오버라이드를 안전한 모양으로 정리한다.
+// 내장 카테고리는 클라이언트 상수라 못 바꾸므로 '덮어쓰기'만 저장한다. name(대상 key)은 저장 안 하고
+// overrides의 '키'로만 쓴다 — 그 key(원래 이름)가 거래에 저장된 식별자라 절대 바뀌면 안 된다.
+function cleanCategoryOverrides(obj) {
+  const out = {};
+  for (const type of ['expense', 'income']) {
+    const src = (obj && typeof obj === 'object' && obj[type]) || {};
+    const srcOv = (src.overrides && typeof src.overrides === 'object') ? src.overrides : {};
+    const overrides = {};
+    let count = 0;
+    for (const k of Object.keys(srcOv)) {
+      if (count++ >= 80) break;                                   // 방어적 상한
+      const key = String(k).slice(0, 40);
+      const v = srcOv[k] || {};
+      const o = {};
+      if (v.hidden) o.hidden = 1;
+      if (v.label != null && String(v.label).trim()) o.label = String(v.label).trim().slice(0, 20);
+      if (v.emoji != null && String(v.emoji).trim()) o.emoji = String(v.emoji).trim().slice(0, 8);
+      if (Object.keys(o).length) overrides[key] = o;
+    }
+    const order = Array.isArray(src.order) ? src.order.slice(0, 80).map(x => String(x).slice(0, 40)) : [];
+    out[type] = { overrides, order };
+  }
+  return out;
+}
 
 // 앱 설정에서 넣은 키가 우선. 없으면 wrangler secret(GEMINI_API_KEY)을 쓴다.
 async function geminiKey(env) {
@@ -182,16 +250,84 @@ function pickGeminiModel(models, exclude) {
   return usable.length ? { model: id(usable[0]), candidates: usable.slice(0, 8).map(id) } : null;
 }
 
-async function listGeminiModels(key) {
+// 키를 구글에 넘기는 방법은 세 가지고, 계정·키 종류에 따라 통하는 게 다르다.
+// 어느 게 맞는지 추측하지 말고 순서대로 다 시도한 뒤, 통한 방식을 기억해 다음부터 한 번에 간다.
+// 두 방식을 '동시에' 쓰면 'Multiple authentication credentials received'가 나므로 반드시 하나씩 쓴다.
+//
+// 실측(2026-08): 가짜 키로 채널만 확인한 결과
+//   AIza… + ?key=          → 400 API_KEY_INVALID          (API 키로 인식됨)
+//   AIza… + x-goog-api-key → 400 API_KEY_INVALID          (헤더 채널도 API 키에 유효)
+//   AQ.…  + 세 방식 모두    → 401 ACCESS_TOKEN_TYPE_UNSUPPORTED / API_KEY_SERVICE_BLOCKED
+// 즉 'AQ.'로 시작하는 값은 이 API가 애초에 API 키로 받아주지 않는다(재시도로 해결되지 않음).
+const GEMINI_AUTH_MODES = ['query', 'header', 'bearer'];
+
+function geminiRequestOnce(base, key, mode, init) {
+  if (mode === 'query') {
+    const sep = base.includes('?') ? '&' : '?';
+    return fetch(base + sep + 'key=' + encodeURIComponent(key), init);
+  }
+  const auth = mode === 'header' ? { 'x-goog-api-key': key } : { 'Authorization': 'Bearer ' + key };
+  return fetch(base, { ...init, headers: { ...(init.headers || {}), ...auth } });
+}
+
+async function geminiFetch(pathAndQuery, key, init = {}, env = null) {
+  const base = 'https://generativelanguage.googleapis.com/v1beta/' + pathAndQuery;
+  // 지난번에 통한 방식이 있으면 그것부터 — 매번 3번씩 두드리지 않도록.
+  const saved = env ? await getSetting(env, 'gemini_auth_mode') : null;
+  const order = (saved && GEMINI_AUTH_MODES.includes(saved))
+    ? [saved, ...GEMINI_AUTH_MODES.filter(m => m !== saved)]
+    : GEMINI_AUTH_MODES;
+
+  let last = null;
+  for (const mode of order) {
+    const res = await geminiRequestOnce(base, key, mode, init);
+    // 401/403은 '이 방식으로는 인증이 안 된다'는 뜻이라 다음 방식으로 넘어간다.
+    // 그 외(200, 400 API_KEY_INVALID, 404 …)는 인증 채널은 통했다는 뜻이므로 그대로 돌려준다.
+    if (res.status !== 401 && res.status !== 403) {
+      // 방식을 '기억'하는 건 실제로 성공했을 때만. 400(키 자체가 무효) 같은 실패까지 기억하면
+      // 저장도 안 된 키의 방식이 설정에 남는다.
+      if (env && res.ok && mode !== saved) await setSetting(env, 'gemini_auth_mode', mode);
+      return res;
+    }
+    last = res;
+  }
+  return last;   // 셋 다 인증 거부
+}
+
+// 구글이 돌려준 오류를 사용자 안내로 바꾼다.
+// 안내는 '사용자가 다음에 뭘 해야 하는지'가 분명해야 한다. 예전 문구는 'AQ.' 키에 대해
+// "잠시 후 다시 시도"라고 해서, 영영 통하지 않을 값을 계속 다시 넣게 만들었다(실측으로 확인).
+function friendlyGeminiError(error, key) {
+  const msg = String(error?.message || error || '');
+  const k = String(key || '');
+
+  // 'AQ.'로 시작하는 값은 세 가지 인증 방식 모두에서 "API 키가 아니다"로 거부된다.
+  // 기다린다고 통하지 않으므로, 올바른 키를 받는 방법을 알려준다.
+  if (k.startsWith('AQ.')) {
+    return 'AQ.로 시작하는 이 값은 Gemini API 키가 아니에요(구글이 API 키로 받지 않습니다). ' +
+           'AI Studio(aistudio.google.com/apikey)에서 [API 키 만들기]로 AIza로 시작하는 키를 새로 만들어 넣어 주세요. ' +
+           'AQ.만 나오면, 키를 만들 때 기존 Google Cloud 프로젝트를 선택해 만들면 AIza 키가 나옵니다.';
+  }
+  if (/API[_ ]?KEY[_ ]?INVALID|API key not valid/i.test(msg)) {
+    return '키가 올바르지 않아요. 앞뒤 공백이나 빠진 글자가 없는지 확인해 주세요. (AI Studio에서 다시 복사하면 확실해요.)';
+  }
+  if (/SERVICE_DISABLED|has not been used in project|is disabled/i.test(msg)) {
+    return '이 키의 프로젝트에서 Gemini API가 꺼져 있어요. Google Cloud Console에서 "Generative Language API"를 켜고 몇 분 뒤 다시 시도해 주세요.';
+  }
+  if (/ACCESS_TOKEN_TYPE_UNSUPPORTED|PERMISSION_DENIED|invalid authentication|API_KEY_SERVICE_BLOCKED/i.test(msg)) {
+    return '이 값으로는 구글 인증이 되지 않아요. AI Studio에서 만든 AIza로 시작하는 API 키인지 확인해 주세요. ' +
+           '(구글 원문: ' + msg.slice(0, 120) + ')';
+  }
+  return msg || '키를 확인해 주세요';
+}
+
+async function listGeminiModels(key, env = null) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
-    const res = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=' + encodeURIComponent(key),
-      { signal: ctrl.signal }
-    );
+    const res = await geminiFetch('models?pageSize=200', key, { signal: ctrl.signal }, env);
     const data = await res.json();
-    if (data?.error) return { err: data.error.message || '키를 확인해 주세요' };
+    if (data?.error) return { err: friendlyGeminiError(data.error, key) };
     return { models: data?.models || [] };
   } catch (e) {
     return { err: e?.name === 'AbortError' ? '구글 응답이 너무 늦어요' : '연결 실패: ' + e.message };
@@ -206,7 +342,7 @@ async function currentGeminiModel(env, key, force = false) {
     const saved = await getSetting(env, 'gemini_model');
     if (saved) return saved;
   }
-  const { models, err } = await listGeminiModels(key);
+  const { models, err } = await listGeminiModels(key, env);
   if (err) return null;
   const picked = pickGeminiModel(models);
   if (!picked) return null;
@@ -223,11 +359,9 @@ async function callGemini(env, key, body) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 25000);
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=` +
-          encodeURIComponent(key),
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal, body: JSON.stringify(body) }
-      );
+      const res = await geminiFetch(`models/${encodeURIComponent(m)}:generateContent`, key, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal, body: JSON.stringify(body),
+      }, env);
       return { status: res.status, data: await res.json() };
     } catch (e) {
       return { err: e?.name === 'AbortError' ? 'AI 응답이 너무 늦어요. 직접 입력해 주세요' : 'AI 호출 실패: ' + e.message };
@@ -246,7 +380,7 @@ async function callGemini(env, key, body) {
   // 또 골라 무한히 같은 실패를 반복한다(예전 버그).
   if (dead(r)) {
     const excluded = new Set([model]);
-    const { models } = await listGeminiModels(key);
+    const { models } = await listGeminiModels(key, env);
     for (let i = 0; i < 3; i++) {   // 죽은 모델을 차례로 빼며 최대 3개 후보까지 시도
       const picked = pickGeminiModel(models, excluded);
       if (!picked) break;
@@ -261,6 +395,9 @@ async function callGemini(env, key, body) {
   }
   if (r.data?.error) {
     console.warn('Gemini 오류:', JSON.stringify(r.data.error).slice(0, 300));
+    const msg = String(r.data.error.message || '');
+    if (/ACCESS_TOKEN_TYPE_UNSUPPORTED|API[_ ]?KEY[_ ]?INVALID|API key not valid|PERMISSION_DENIED/i.test(msg))
+      return { err: friendlyGeminiError(r.data.error, key) };
     return { err: 'AI 인식에 실패했어요. 직접 입력해 주세요' };
   }
   return { text: r.data?.candidates?.[0]?.content?.parts?.[0]?.text || '' };
@@ -286,31 +423,60 @@ export default {
 
     try {
       // ── 로그인 ──
+      // 로그인 화면이 '로그인'과 '계정 만들기' 중 무엇을 먼저 보여줄지 정하는 데 쓴다(공개).
+      // 계정이 하나도 없으면 앱이 '계정 만들기'를 먼저 띄운다.
+      if (path === '/api/auth/status' && request.method === 'GET') {
+        let hasUsers = false;
+        try {
+          const c = await env.DB.prepare(`SELECT COUNT(*) AS n FROM users`).first();
+          hasUsers = (c?.n || 0) > 0;
+        } catch (e) { /* users 테이블이 아직 없으면 조용히 false */ }
+        return json({ hasUsers });
+      }
+
+      // 계정 만들기 — 가입 코드(= 예전 공유 비밀번호 APP_PASSWORD)를 아는 사람만 만들 수 있다.
+      // 만든 뒤부터는 자기 이름+비밀번호로 로그인하고, 비밀번호도 본인이 바꾼다. 데이터는 그대로 공유.
+      if (path === '/api/signup' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        if (await throttleLogin(env, request)) return json({ error: '시도가 너무 많아요. 잠시 후 다시 시도해 주세요' }, 429);
+        await new Promise((r) => setTimeout(r, 400));
+        if (!safeEqual(b?.code ?? '', env.APP_PASSWORD)) return json({ error: '가입 코드가 맞지 않아요' }, 401);
+        const name = String(b?.name ?? '').trim().slice(0, 40);
+        const password = String(b?.password ?? '');
+        if (name.length < 1) return json({ error: '이름을 입력해 주세요' }, 400);
+        if (password.length < 4) return json({ error: '비밀번호는 4자 이상으로 정해 주세요' }, 400);
+        const dup = await env.DB.prepare(`SELECT id FROM users WHERE name = ?1`).bind(name).first();
+        if (dup) return json({ error: '이미 있는 이름이에요. 로그인해 주세요' }, 409);
+        const { salt, hash } = await hashPassword(password);
+        const id = crypto.randomUUID();
+        await env.DB.prepare(`INSERT INTO users (id, name, salt, hash) VALUES (?1, ?2, ?3, ?4)`).bind(id, name, salt, hash).run();
+        return json({ token: await issueToken({ id, name }, env.SESSION_SECRET), name });
+      }
+
+      // 로그인 — 이름 + 자기 비밀번호.
       if (path === '/api/login' && request.method === 'POST') {
         const b = await request.json().catch(() => ({}));
-
-        // IP별 레이트리밋. 400ms 지연은 요청 안에서만 걸려 병렬 공격엔 무력하므로, 실제 방어는 이 카운터다.
-        // append-only INSERT 후 카운트라 병렬 요청도 각자 한 건씩 쌓여 throttle을 못 피한다.
-        const ip = request.headers.get('CF-Connecting-IP') || 'local';
-        const now = Date.now();
-        const WINDOW = 10 * 60 * 1000, LIMIT = 10;   // 10분에 10회
-        try {
-          await env.DB.prepare(`DELETE FROM login_attempts WHERE at < ?1`).bind(now - WINDOW).run();
-          await env.DB.prepare(`INSERT INTO login_attempts (ip, at) VALUES (?1, ?2)`).bind(ip, now).run();
-          const c = await env.DB.prepare(`SELECT COUNT(*) AS n FROM login_attempts WHERE ip = ?1 AND at > ?2`)
-                                .bind(ip, now - WINDOW).first();
-          if ((c?.n || 0) > LIMIT) {
-            return json({ error: '로그인 시도가 너무 많아요. 잠시 후 다시 시도해 주세요' }, 429);
+        if (await throttleLogin(env, request)) return json({ error: '로그인 시도가 너무 많아요. 잠시 후 다시 시도해 주세요' }, 429);
+        await new Promise((r) => setTimeout(r, 400));  // 무차별 대입 속도를 떨어뜨린다(보조 수단)
+        const name = String(b?.name ?? '').trim().slice(0, 40);
+        const password = String(b?.password ?? '');
+        const u = name ? await env.DB.prepare(`SELECT id, name, salt, hash FROM users WHERE name = ?1`).bind(name).first() : null;
+        if (u) {
+          const { hash } = await hashPassword(password, u.salt);
+          if (safeEqual(hash, u.hash)) {
+            return json({ token: await issueToken({ id: u.id, name: u.name }, env.SESSION_SECRET), name: u.name });
           }
-        } catch (e) { /* 카운터 실패가 로그인을 막지는 않게 한다 */ }
-
-        // 무차별 대입 속도를 떨어뜨린다(보조 수단).
-        await new Promise((r) => setTimeout(r, 400));
-        if (!safeEqual(b?.password ?? '', env.APP_PASSWORD)) {
-          return json({ error: '비밀번호가 맞지 않아요' }, 401);
+        } else {
+          // 하위호환 부트스트랩: 계정이 하나도 없던 시절엔 예전 공유 비밀번호로도 들어올 수 있다.
+          // 첫 계정이 만들어지는 순간부터는 막혀, 나머지도 각자 계정을 만들게 된다.
+          let anyUser = 0;
+          try { anyUser = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM users`).first())?.n || 0; } catch (e) {}
+          if (anyUser === 0 && safeEqual(password, env.APP_PASSWORD)) {
+            return json({ token: await issueToken({ id: null, name }, env.SESSION_SECRET), name });
+          }
         }
-        const name = String(b?.name ?? '').slice(0, 40);
-        return json({ token: await issueToken(name, env.SESSION_SECRET), name });
+        // 이름이 없는지 비번이 틀린지 구분해 알려주지 않는다(이름 추측을 돕지 않으려고).
+        return json({ error: '이름 또는 비밀번호가 맞지 않아요' }, 401);
       }
 
       // ── 이하 전부 인증 필요 ──
@@ -319,7 +485,25 @@ export default {
       if (!session) return json({ error: '로그인이 필요해요' }, 401);
 
       if (path === '/api/me' && request.method === 'GET') {
-        return json({ name: session.n });
+        return json({ name: session.n, id: session.u || null });
+      }
+
+      // 비밀번호 변경 — 본인 계정만(토큰의 u가 곧 신원). 현재 비밀번호 확인 후 교체.
+      if (path === '/api/password' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        if (!session.u) {
+          return json({ error: '이 로그인은 옛 방식이라 비밀번호를 바꿀 수 없어요. 로그아웃 후 "계정 만들기"로 내 계정을 만들어 주세요' }, 400);
+        }
+        const current = String(b?.current ?? '');
+        const next = String(b?.next ?? '');
+        if (next.length < 4) return json({ error: '새 비밀번호는 4자 이상으로 정해 주세요' }, 400);
+        const u = await env.DB.prepare(`SELECT salt, hash FROM users WHERE id = ?1`).bind(session.u).first();
+        if (!u) return json({ error: '계정을 찾을 수 없어요. 다시 로그인해 주세요' }, 404);
+        const cur = await hashPassword(current, u.salt);
+        if (!safeEqual(cur.hash, u.hash)) return json({ error: '현재 비밀번호가 맞지 않아요' }, 401);
+        const nu = await hashPassword(next);
+        await env.DB.prepare(`UPDATE users SET salt = ?1, hash = ?2 WHERE id = ?3`).bind(nu.salt, nu.hash, session.u).run();
+        return json({ ok: true });
       }
 
       // ── 한 달치 화면에 필요한 것을 한 번에 ──
@@ -455,7 +639,7 @@ export default {
 
         // 저장하기 전에 키가 진짜 되는지 확인한다. 안 그러면 오타난 키가 저장되고
         // 나중에 사진 찍을 때가 되어서야 실패해 원인을 알기 어렵다.
-        const { models, err } = await listGeminiModels(key);
+        const { models, err } = await listGeminiModels(key, env);
         if (err) return json({ error: err }, 400);
         const picked = pickGeminiModel(models);
         if (!picked) return json({ error: '이 키로 쓸 수 있는 모델이 없어요' }, 400);
@@ -469,7 +653,7 @@ export default {
       if (path === '/api/settings/gemini/redetect' && request.method === 'POST') {
         const key = await geminiKey(env);
         if (!key) return json({ error: '먼저 API 키를 넣어주세요' }, 400);
-        const { models, err } = await listGeminiModels(key);
+        const { models, err } = await listGeminiModels(key, env);
         if (err) return json({ error: err }, 400);
         const picked = pickGeminiModel(models);
         if (!picked) return json({ error: '쓸 수 있는 모델이 없어요' }, 400);
@@ -478,8 +662,22 @@ export default {
       }
 
       if (path === '/api/settings/gemini' && request.method === 'DELETE') {
-        await env.DB.prepare(`DELETE FROM app_settings WHERE key IN ('gemini_key','gemini_model')`).run();
+        await env.DB.prepare(`DELETE FROM app_settings WHERE key IN ('gemini_key','gemini_model','gemini_auth_mode')`).run();
         return json({ ok: true, configured: !!env.GEMINI_API_KEY });
+      }
+
+      // 카테고리 편집(숨김/이름/이모지/순서) 오버라이드. 두 폰이 공유해야 하므로 서버(app_settings)에 둔다
+      // (localStorage 금지 — 정기지출 규칙을 같은 이유로 서버로 옮긴 전례). 내장 카테고리는 클라이언트
+      // 상수라, 여기엔 '덮어쓰기'만 JSON 한 덩어리로 담는다. 거래에 저장된 category(원래 key)는 안 건드린다.
+      if (path === '/api/settings/categories' && request.method === 'GET') {
+        const raw = await getSetting(env, 'category_overrides');
+        return json({ overrides: raw ? safeParse(raw) : null });
+      }
+      if (path === '/api/settings/categories' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const clean = cleanCategoryOverrides(b?.overrides);
+        await setSetting(env, 'category_overrides', JSON.stringify(clean));
+        return json({ ok: true, overrides: clean });
       }
 
       // ── 영수증 AI 인식 ──
@@ -794,6 +992,7 @@ export default {
         const bud = await env.DB.prepare(`SELECT id, month, category, amount FROM budgets`).all();
         const rec = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules`).all();
         const cat = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories`).all();
+        const catOv = await getSetting(env, 'category_overrides');
         return json({
           version: 1,
           exported_at: new Date().toISOString(),
@@ -801,6 +1000,7 @@ export default {
           budgets: bud.results ?? [],
           recurring_rules: rec.results ?? [],
           categories: cat.results ?? [],
+          category_overrides: catOv ? safeParse(catOv) : null,
         });
       }
 
@@ -854,6 +1054,10 @@ export default {
             ).bind(c.id || crypto.randomUUID(), c.type, String(c.name), String(c.emoji || '🏷️').slice(0, 8), Number(c.sort) || 0).run();
             if (r.meta.changes) counts.categories++;
           } catch (e) {}
+        }
+        // 카테고리 편집(숨김/이름/순서). 백업에 있으면 되살린다 — 안 그러면 복원 한 번에 편집이 날아간다.
+        if (b?.category_overrides && typeof b.category_overrides === 'object') {
+          try { await setSetting(env, 'category_overrides', JSON.stringify(cleanCategoryOverrides(b.category_overrides))); } catch (e) {}
         }
         return json({ ok: true, counts });
       }
