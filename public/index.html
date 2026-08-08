@@ -661,14 +661,18 @@ body {
       <input class="form-input" id="login-password" type="password" placeholder="내 비밀번호"
              autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuth()">
     </div>
+    <div id="reset-hint" style="display:none;font-size:12px;color:var(--text2);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:10px;line-height:1.5">
+      🔑 이름과 <b>가입 코드</b>를 확인하고 <b>새 비밀번호</b>로 바꿉니다. 바꾸면 바로 로그인돼요.</div>
     <div class="form-group" id="signup-code-group" style="display:none">
       <label class="form-label">가입 코드</label>
       <input class="form-input" id="signup-code" type="password" placeholder="우리집 공용 코드" autocomplete="off"
              autocapitalize="off" onkeydown="if(event.key==='Enter')submitAuth()">
       <div style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.5">
-        예전에 함께 쓰던 '우리집 비밀번호'예요. 계정을 <b>처음 만들 때 한 번만</b> 필요해요.</div>
+        예전에 함께 쓰던 '우리집 비밀번호'예요. (계정 만들기·비밀번호 재설정에 필요)</div>
     </div>
     <button class="btn-primary" id="login-btn" onclick="submitAuth()">🔓 들어가기</button>
+    <div id="forgot-link" onclick="setAuthMode('reset')"
+         style="text-align:center;margin-top:12px;font-size:13px;color:var(--accent);cursor:pointer">비밀번호를 잊으셨나요?</div>
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
       <div style="font-size:12px;color:var(--text3);margin-bottom:8px">먼저 둘러보고 싶다면</div>
       <button class="btn-secondary" onclick="useDemoMode()" style="margin-top:0">⚡ 데모 모드로 시작</button>
@@ -1085,7 +1089,7 @@ body {
 
     <div class="form-group">
       <label class="form-label">금액</label>
-      <input class="form-input amount" id="tx-amount" type="text" inputmode="numeric" placeholder="0" oninput="fmtMoneyInput(this);updateInstallmentHint()">
+      <input class="form-input amount" id="tx-amount" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0" oninput="fmtMoneyInput(this);updateInstallmentHint()">
     </div>
 
     <!-- 카드사·할부: 지출일 때만. 할부면 위 '금액'을 총액으로 보고 매달 나눠 등록한다. -->
@@ -1155,7 +1159,7 @@ body {
     </div>
     <div class="form-group">
       <label class="form-label">월 예산</label>
-      <input class="form-input amount" id="budget-amount" type="text" inputmode="numeric" placeholder="0" oninput="fmtMoneyInput(this)">
+      <input class="form-input amount" id="budget-amount" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0" oninput="fmtMoneyInput(this)">
     </div>
     <button class="btn-primary" onclick="saveBudget()">저장</button>
     <button class="btn-secondary" onclick="closeModal('budget-modal')">취소</button>
@@ -1289,7 +1293,7 @@ body {
     </div>
     <div class="form-group">
       <label class="form-label">금액</label>
-      <input class="form-input amount" id="rec-amount" type="text" inputmode="numeric" placeholder="0" oninput="fmtMoneyInput(this)">
+      <input class="form-input amount" id="rec-amount" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0" oninput="fmtMoneyInput(this)">
     </div>
     <div class="form-group">
       <label class="form-label">카테고리</label>
@@ -1297,7 +1301,7 @@ body {
     </div>
     <div class="form-group">
       <label class="form-label">매월 몇 일?</label>
-      <input class="form-input" id="rec-day" type="number" min="1" max="31" placeholder="예: 5">
+      <input class="form-input" id="rec-day" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="31" placeholder="예: 5">
     </div>
     <button class="btn-primary" onclick="saveRecurring()">저장</button>
     <button class="btn-secondary" onclick="closeModal('recurring-modal')">취소</button>
@@ -1581,8 +1585,8 @@ async function api(path, { method = 'GET', body } = {}) {
   });
   let data = null;
   try { data = await res.json(); } catch(e) {}
-  // 토큰 만료/무효는 로그인으로 되돌린다. (로그인·가입 요청 자체의 401은 '비번/코드 틀림'이므로 제외)
-  if (res.status === 401 && path !== '/login' && path !== '/signup') {
+  // 토큰 만료/무효는 로그인으로 되돌린다. (로그인·가입·재설정 요청의 401은 '비번/코드 틀림'이므로 제외)
+  if (res.status === 401 && path !== '/login' && path !== '/signup' && path !== '/reset-password') {
     authToken = null;
     localStorage.removeItem('auth_token');
     // 여기서 화면도 로그인으로 돌려줘야 한다. 안 그러면 저장/삭제 중 토큰이 만료된 경우
@@ -1598,15 +1602,29 @@ async function api(path, { method = 'GET', body } = {}) {
 // 로그인 화면 모드: 'login'(이름+비번) / 'signup'(이름+비번+가입코드)
 let authMode = 'login';
 function setAuthMode(mode) {
-  authMode = (mode === 'signup') ? 'signup' : 'login';
+  authMode = (mode === 'signup' || mode === 'reset') ? mode : 'login';
+  const needCode = (authMode === 'signup' || authMode === 'reset');   // 가입·재설정엔 가입 코드가 필요
   document.getElementById('tab-login').classList.toggle('active', authMode === 'login');
   document.getElementById('tab-signup').classList.toggle('active', authMode === 'signup');
-  document.getElementById('signup-code-group').style.display = authMode === 'signup' ? '' : 'none';
-  document.getElementById('login-btn').textContent = authMode === 'signup' ? '✨ 계정 만들기' : '🔓 들어가기';
-  document.getElementById('login-password').setAttribute('autocomplete', authMode === 'signup' ? 'new-password' : 'current-password');
+  document.getElementById('signup-code-group').style.display = needCode ? '' : 'none';
+  document.getElementById('login-btn').textContent =
+    authMode === 'signup' ? '✨ 계정 만들기' : authMode === 'reset' ? '🔑 비밀번호 재설정' : '🔓 들어가기';
+  const pw = document.getElementById('login-password');
+  pw.setAttribute('autocomplete', authMode === 'login' ? 'current-password' : 'new-password');
+  pw.setAttribute('placeholder', authMode === 'reset' ? '새 비밀번호 (4자 이상)' : authMode === 'signup' ? '쓸 비밀번호 (4자 이상)' : '내 비밀번호');
+  // '비밀번호를 잊으셨나요?' 링크는 로그인 모드에서만.
+  const forgot = document.getElementById('forgot-link');
+  if (forgot) forgot.style.display = (authMode === 'login') ? '' : 'none';
+  // 재설정 안내
+  const hint = document.getElementById('reset-hint');
+  if (hint) hint.style.display = (authMode === 'reset') ? '' : 'none';
 }
 
-function submitAuth() { return authMode === 'signup' ? signup() : login(); }
+function submitAuth() {
+  if (authMode === 'signup') return signup();
+  if (authMode === 'reset') return resetPassword();
+  return login();
+}
 
 // 로그인/가입 성공 뒤 공통 처리 — 토큰 저장 후 앱 진입.
 function afterAuth(r) {
@@ -1653,6 +1671,26 @@ async function signup() {
     showToast('❌ ' + e.message);
   } finally {
     btn.disabled = false; btn.textContent = authMode === 'signup' ? '✨ 계정 만들기' : '🔓 들어가기';
+  }
+}
+
+// 비밀번호 재설정 — 이름 + 가입 코드(공유 비밀번호)를 확인하고 새 비번으로 바꾼 뒤 바로 로그인.
+async function resetPassword() {
+  const name = document.getElementById('login-name').value.trim();
+  const pw = document.getElementById('login-password').value;
+  const code = document.getElementById('signup-code').value;
+  if (!name) { showToast('이름을 입력해 주세요'); return; }
+  if (pw.length < 4) { showToast('새 비밀번호는 4자 이상으로 정해 주세요'); return; }
+  if (!code) { showToast('가입 코드를 입력해 주세요'); return; }
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true; btn.textContent = '변경 중…';
+  try {
+    afterAuth(await api('/reset-password', { method: 'POST', body: { name, password: pw, code } }));
+    showToast('✅ 비밀번호를 바꿨어요');
+  } catch(e) {
+    showToast('❌ ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '🔑 비밀번호 재설정';
   }
 }
 
@@ -2007,10 +2045,10 @@ function renderCardSettingsList() {
       </div>
       <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
         <label style="font-size:11px;color:var(--text3);flex-shrink:0">시작</label>
-        <input class="form-input" type="number" min="1" max="31" value="${c.startDay}"
+        <input class="form-input" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="31" value="${c.startDay}"
                style="margin:0;width:62px;padding:6px;font-size:13px" onchange="setCardField(${i},'startDay',this.value)">
         <label style="font-size:11px;color:var(--text3);flex-shrink:0">결제</label>
-        <input class="form-input" type="number" min="1" max="31" value="${c.payDay}"
+        <input class="form-input" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="31" value="${c.payDay}"
                style="margin:0;width:62px;padding:6px;font-size:13px" onchange="setCardField(${i},'payDay',this.value)">
         <input class="form-input" value="${esc(c.owner || '')}" maxlength="40" placeholder="누구 카드"
                style="margin:0;flex:1;min-width:0;padding:6px;font-size:12px" onchange="setCardField(${i},'owner',this.value)">
@@ -2209,10 +2247,11 @@ async function addCategory() {
   const name = document.getElementById('cat-name-input').value.trim();
   if (!name) { showToast('카테고리 이름을 입력해 주세요'); return; }
   if (name.length > 20) { showToast('이름이 너무 길어요 (20자 이내)'); return; }
-  // 같은 유형 안에서 내장·커스텀과 중복 방지
-  const taken = [...BUILTIN_CATEGORIES[newCatType].map(c => c.key),
-                 ...customCategories.filter(c => c.type === newCatType).map(c => c.name)];
-  if (taken.includes(name)) { showToast('이미 있는 카테고리예요'); return; }
+  // 이름 중복 방지 — 지출·수입을 '통틀어' 유일해야 한다. 카테고리 조회(catInfo)가 이름만으로
+  // 이뤄져서, 지출·수입에 같은 이름이 있으면 한쪽이 다른쪽 이모지·라벨로 잘못 표시되기 때문.
+  const taken = [...BUILTIN_CATEGORIES.expense, ...BUILTIN_CATEGORIES.income].map(c => c.key)
+    .concat(customCategories.map(c => c.name));
+  if (taken.includes(name)) { showToast('이미 있는 카테고리예요 (지출·수입 통틀어 같은 이름은 못 써요)'); return; }
   const emoji = selectedNewCatEmoji || '🏷️';
   try {
     if (demoMode) {
@@ -2240,6 +2279,16 @@ async function deleteCategory(id) {
       customCategories = (await api('/categories/' + encodeURIComponent(id), { method: 'DELETE' })).categories || [];
     }
   } catch (e) { showToast('❌ 삭제 실패: ' + e.message); return; }
+  // 삭제한 이름의 편집 잔재(라벨/이모지/숨김/순서)를 함께 지운다 — 안 지우면 같은 이름을 다시 추가할 때
+  // 예전 오버라이드(특히 hidden:1)가 되살아나 방금 만든 카테고리가 숨김/딴이름으로 나온다.
+  if (c) {
+    const ot = categoryOverrides[c.type];
+    if (ot) {
+      if (ot.overrides) delete ot.overrides[c.name];
+      if (Array.isArray(ot.order)) ot.order = ot.order.filter(k => k !== c.name);
+      await saveCategoryOverrides();
+    }
+  }
   rebuildCategories();
   renderCategoryGrids();
   renderCatManageList();
@@ -2373,7 +2422,7 @@ function renderHomePage() {
     const barCls = budAmt > 0 && budPct > 100 ? 'budget-over' : budAmt > 0 && budPct > 80 ? 'budget-warn' : '';
     return `<div class="cat-bar-item">
       <div class="cat-bar-header">
-        <div class="cat-bar-name">${emoji} ${esc(cat)}</div>
+        <div class="cat-bar-name">${emoji} ${esc(catInfo(cat).label)}</div>
         <div class="cat-bar-amount">-${fmtMoney(amt)}</div>
       </div>
       <div class="cat-bar-track"><div class="cat-bar-fill ${barCls}" style="width:${pctBar}%"></div></div>
@@ -2459,7 +2508,7 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
     const times = big.prv > 0 ? ` (${(big.cur / big.prv).toFixed(1)}배)` : '';
     changeEl.style.display = 'block';
     changeEl.innerHTML = `<div style="font-size:12px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:${up ? 'var(--expense)' : 'var(--income)'}">
-      ${up ? '▲' : '👍'} ${emoji} ${esc(big.c)}가 지난달보다 <b>${fmtMoney(Math.abs(big.d))}</b>${up ? ' 늘었어요' + times : ' 줄었어요'}</div>`;
+      ${up ? '▲' : '👍'} ${emoji} ${esc(catInfo(big.c).label)}가 지난달보다 <b>${fmtMoney(Math.abs(big.d))}</b>${up ? ' 늘었어요' + times : ' 줄었어요'}</div>`;
   } else {
     changeEl.style.display = 'none';
   }
@@ -2476,7 +2525,7 @@ function renderHistoryPage() {
   const cats = ['전체', ...new Set(monthTx.map(t=>t.category))];
   const tabHTML = cats.map(c => `
     <div class="tab-item ${c===selectedCategoryFilter?'active':''}"
-         data-cat="${esc(c)}" onclick="filterByCategory(this)">${esc(c)}</div>
+         data-cat="${esc(c)}" onclick="filterByCategory(this)">${esc(c==='전체' ? '전체' : catInfo(c).label)}</div>
   `).join('');
   document.getElementById('category-filter-tabs').innerHTML = tabHTML;
 
@@ -2678,7 +2727,7 @@ function renderRecurringList() {
   list.innerHTML = recurringItems.map((r,i) => `
     <div class="settings-item" style="margin-bottom:6px">
       <div class="settings-item-left">
-        <div class="settings-item-icon">${CATEGORIES.expense.find(c=>c.key===r.category)?.emoji||'📦'}</div>
+        <div class="settings-item-icon">${catInfo(r.category).emoji}</div>
         <div>
           <div class="settings-item-text">${esc(r.name)}</div>
           <div class="settings-item-sub">매월 ${r.day}일 · ${fmtMoney(r.amount)}</div>
@@ -4465,7 +4514,7 @@ function openMonthlyReport() {
         <div style="width:28px;text-align:center">${emoji}</div>
         <div style="flex:1">
           <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-            <span style="color:var(--text)">${esc(cat)}</span>
+            <span style="color:var(--text)">${esc(catInfo(cat).label)}</span>
             <span style="font-family:var(--font-mono);color:var(--expense)">${fmtMoney(amt)}</span>
           </div>
           <div style="height:4px;background:var(--bg3);border-radius:2px">
@@ -4500,7 +4549,7 @@ function openMonthlyReport() {
     </div>` : overBudget.length > 0 ? `
     <div style="margin-top:12px;padding:10px 14px;background:rgba(255,107,107,0.1);border:1px solid var(--expense);border-radius:8px">
       <div style="font-size:12px;font-weight:700;color:var(--expense);margin-bottom:4px">⚠️ 예산 초과 항목</div>
-      ${overBudget.map(b => `<div style="font-size:12px;color:var(--text2)">${esc(b.category)}: 예산 ${fmtMoney(b.amount)} → 실지출 ${fmtMoney(catTotals[b.category])}</div>`).join('')}
+      ${overBudget.map(b => `<div style="font-size:12px;color:var(--text2)">${esc(catInfo(b.category).label)}: 예산 ${fmtMoney(b.amount)} → 실지출 ${fmtMoney(catTotals[b.category])}</div>`).join('')}
     </div>` : `
     <div style="margin-top:12px;padding:10px 14px;background:rgba(78,205,196,0.1);border:1px solid var(--income);border-radius:8px;font-size:12px;color:var(--income)">
       ✅ 모든 카테고리 예산 내에서 지출했어요!

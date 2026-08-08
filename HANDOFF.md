@@ -36,6 +36,7 @@ npx wrangler d1 execute gagyebu --remote --file=schema.sql   # 스키마(새 DB 
 
 ## 3. 반드시 아는 함정 (코드를 아무리 봐도 안 보이는 것)
 - **데모 모드로 테스트하면 클라우드 경로 버그가 안 보인다.** 실제 검증은 로그인해서 할 것. `useDemoMode()`로 로컬 시드.
+- **★ 로컬 `wrangler dev`와 운영(workerd)의 crypto가 다르다.** Web Crypto **PBKDF2 반복은 운영에서 10만 회가 상한**(초과 시 `Pbkdf2 failed: iteration counts above 100000 are not supported`로 500). 로컬은 이 상한을 안 걸어 15만도 통과 → **로컬만 보고 배포하면 개인 계정 가입·로그인이 운영에서 통째로 죽는다**(실제로 한 번 겪음, 26-08-08). 인증·crypto 변경은 **배포 후 운영 URL에서** 확인할 것. 무토큰 `POST /api/login {name:"없는이름"}`이 401(500 아님)이면 hashPassword가 운영에서 살아있다는 증거(더미 해시 경로).
 - **서비스워커(sw.js)가 `/api/*`를 캐시하면 안 된다.** 캐시하면 저장은 되는데 목록이 옛 응답을 받아 "저장 완료"라 하고 화면엔 안 뜬다(한 번 겪음). 배포 시 `CACHE_NAME` 버전 올릴 것.
 - **목록 응답에 `photo_url`(base64) 넣지 말 것** — 6개월치면 수십 MB. 목록엔 `has_photo`만, 이미지는 `/api/tx/:id/photo`로 따로.
 - **`toISOString()` 쓰지 말 것** — UTC라 한국 자정~오전 9시엔 어제가 된다. `todayLocal()` 사용.

@@ -77,7 +77,11 @@ async function issueToken(user, secret) {
 // ───────── 비밀번호 해시 (PBKDF2-SHA256) ─────────
 // 원문은 저장하지 않는다. 계정마다 무작위 salt로 15만회 파생한 해시만 users에 담고,
 // 로그인 때 같은 salt로 다시 파생해 상수시간 비교(safeEqual)한다.
-const PBKDF2_ITERS = 150000;
+// Cloudflare Workers의 Web Crypto는 PBKDF2 반복을 10만 회로 '상한'을 둔다(초과 시 런타임 오류).
+// ★ 로컬 wrangler dev는 이 상한을 안 걸어서 15만도 통과하지만, 운영(workerd)에선 hashPassword가
+//   통째로 500으로 죽는다 — 계정 가입·로그인이 조용히 다 실패. 그래서 상한인 10만을 쓴다.
+//   (부부 2명·초대코드·레이트리밋 환경이라 10만이면 충분하다.)
+const PBKDF2_ITERS = 100000;
 const bytesToHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 function hexToBytes(hex) {
   const s = String(hex || '');
@@ -467,6 +471,9 @@ export default {
             return json({ token: await issueToken({ id: u.id, name: u.name }, env.SESSION_SECRET), name: u.name });
           }
         } else {
+          // 이름이 없어도 해시를 한 번 계산해 응답 시간을 계정 있을 때와 맞춘다.
+          // 안 그러면 '이 이름의 계정이 있나'가 응답 속도(PBKDF2 유무)로 새어 나간다(타이밍 사이드채널).
+          await hashPassword(password, '0'.repeat(32));
           // 하위호환 부트스트랩: 계정이 하나도 없던 시절엔 예전 공유 비밀번호로도 들어올 수 있다.
           // 첫 계정이 만들어지는 순간부터는 막혀, 나머지도 각자 계정을 만들게 된다.
           let anyUser = 0;
@@ -477,6 +484,25 @@ export default {
         }
         // 이름이 없는지 비번이 틀린지 구분해 알려주지 않는다(이름 추측을 돕지 않으려고).
         return json({ error: '이름 또는 비밀번호가 맞지 않아요' }, 401);
+      }
+
+      // 비밀번호 재설정 — 현재 비번을 몰라도, 가입 코드(공유 비밀번호)를 아는 사람이 이름으로 새 비번을 정한다.
+      // 부부가 코드를 공유하는 구조라 코드를 아는 사람은 어느 계정이든 재설정 가능(집 안 마스터키 성격).
+      // 성공하면 바로 그 계정으로 로그인시킨다.
+      if (path === '/api/reset-password' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        if (await throttleLogin(env, request)) return json({ error: '시도가 너무 많아요. 잠시 후 다시 시도해 주세요' }, 429);
+        await new Promise((r) => setTimeout(r, 400));
+        if (!safeEqual(b?.code ?? '', env.APP_PASSWORD)) return json({ error: '가입 코드가 맞지 않아요' }, 401);
+        const name = String(b?.name ?? '').trim().slice(0, 40);
+        const password = String(b?.password ?? '');
+        if (password.length < 4) return json({ error: '새 비밀번호는 4자 이상으로 정해 주세요' }, 400);
+        const u = name ? await env.DB.prepare(`SELECT id, name FROM users WHERE name = ?1`).bind(name).first() : null;
+        // 여기선 코드로 이미 본인임을 증명했으므로 '없는 이름'을 알려줘도 된다(도움이 됨).
+        if (!u) return json({ error: '그 이름의 계정이 없어요. 이름을 확인해 주세요' }, 404);
+        const { salt, hash } = await hashPassword(password);
+        await env.DB.prepare(`UPDATE users SET salt = ?1, hash = ?2 WHERE id = ?3`).bind(salt, hash, u.id).run();
+        return json({ token: await issueToken({ id: u.id, name: u.name }, env.SESSION_SECRET), name: u.name });
       }
 
       // ── 이하 전부 인증 필요 ──
