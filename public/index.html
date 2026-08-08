@@ -861,6 +861,26 @@ body {
       <div class="settings-title">알림</div>
       <div class="settings-item">
         <div class="settings-item-left">
+          <div class="settings-item-icon">📣</div>
+          <div>
+            <div class="settings-item-text">새 거래 알림 (앱이 꺼져 있어도)</div>
+            <div class="settings-item-sub" id="push-status">확인 중…</div>
+          </div>
+        </div>
+        <div class="toggle" id="push-toggle" onclick="togglePush()"></div>
+      </div>
+      <div class="settings-item" onclick="sendTestPush()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🧪</div>
+          <div>
+            <div class="settings-item-text">테스트 알림 보내기</div>
+            <div class="settings-item-sub">켜둔 기기 전부에 한 번 보내봐요</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
+      <div class="settings-item">
+        <div class="settings-item-left">
           <div class="settings-item-icon">🔔</div>
           <div>
             <div class="settings-item-text">예산 초과 알림</div>
@@ -1857,6 +1877,8 @@ async function loadData() {
   await loadCategories();   // 사용자 카테고리(내장+커스텀 병합). 실패해도 내장으로 동작.
   await loadCardSettings(); // 카드 결제일·이용기간 (없으면 기본값)
   setCatBasis(catBasis);    // 저장해둔 기준으로 토글 표시를 맞춘다
+  refreshPushStatus();      // 알림 켜짐/꺼짐 표시
+  stashTokenForSW();        // 토큰이 새로 발급됐을 수 있으니 SW용 사본도 갱신
   renderAll();
   refreshAiStatus();       // 설정 화면의 AI 상태 표시 (실패해도 앱엔 지장 없으므로 await 안 함)
 }
@@ -1875,6 +1897,122 @@ async function loadCategories() {
   } catch (e) { /* 실패해도 내장 카테고리로 동작한다 */ }
   rebuildCategories();
   renderCategoryGrids();    // 예산·정기 지출의 카테고리 선택칸을 새 목록으로 갱신
+}
+
+// ===== 웹푸시 (앱이 꺼져 있어도 알림) =====
+// 아이폰은 '홈 화면에 추가'로 설치한 상태에서만 웹푸시가 동작한다(사파리 탭에서는 안 온다).
+const PUSH_TOKEN_CACHE = 'gagyebu-push-auth';
+const PUSH_TOKEN_URL = 'https://gagyebu.local/push-token';
+
+// 서비스워커가 알림 문구를 받아오려면 인증이 필요하다. 토큰을 캐시에 넣어 SW가 읽게 한다.
+// (localStorage는 SW에서 못 읽는다.)
+async function stashTokenForSW() {
+  try {
+    if (!authToken || !('caches' in window)) return;
+    const c = await caches.open(PUSH_TOKEN_CACHE);
+    await c.put(PUSH_TOKEN_URL, new Response(authToken));
+  } catch (e) {}
+}
+async function clearTokenForSW() {
+  try { const c = await caches.open(PUSH_TOKEN_CACHE); await c.delete(PUSH_TOKEN_URL); } catch (e) {}
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; ++i) out[i] = raw.charCodeAt(i);
+  return out;
+}
+const bufToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+async function currentPushSub() {
+  if (!pushSupported()) return null;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  } catch (e) { return null; }
+}
+
+async function refreshPushStatus() {
+  const el = document.getElementById('push-status');
+  const tg = document.getElementById('push-toggle');
+  if (!el || !tg) return;
+  if (!pushSupported()) {
+    el.textContent = '이 브라우저는 알림을 지원하지 않아요';
+    tg.classList.remove('on'); return;
+  }
+  if (demoMode || !authToken) { el.textContent = '로그인 후 켤 수 있어요'; tg.classList.remove('on'); return; }
+  // 아이폰은 홈 화면에 설치해야만 알림이 온다.
+  const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const installed = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  if (iOS && !installed) {
+    el.textContent = '아이폰은 홈 화면에 추가한 뒤에 켤 수 있어요';
+    tg.classList.remove('on'); return;
+  }
+  const sub = await currentPushSub();
+  if (sub && Notification.permission === 'granted') {
+    el.textContent = '켜짐 — 새 거래가 등록되면 알려드려요';
+    tg.classList.add('on');
+  } else {
+    el.textContent = Notification.permission === 'denied'
+      ? '차단됨 — 폰 설정에서 이 앱의 알림을 허용해 주세요'
+      : '꺼짐 — 켜면 두 분 모두에게 알림이 가요';
+    tg.classList.remove('on');
+  }
+}
+
+async function togglePush() {
+  if (!pushSupported()) { showToast('이 브라우저는 알림을 지원하지 않아요'); return; }
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  const sub = await currentPushSub();
+
+  if (sub) {   // 끄기
+    try {
+      await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
+      await sub.unsubscribe();
+      await clearTokenForSW();
+      showToast('🔕 알림을 껐어요');
+    } catch (e) { showToast('❌ ' + e.message); }
+    refreshPushStatus();
+    return;
+  }
+
+  // 켜기 — 권한은 반드시 사용자가 누른 그 순간에 물어야 한다(나중에 물으면 브라우저가 막는다).
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { showToast('알림 권한이 필요해요'); refreshPushStatus(); return; }
+    const { key } = await api('/push/key');
+    if (!key) { showToast('서버에 알림 키가 없어요'); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const newSub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(key),
+    });
+    const j = newSub.toJSON ? newSub.toJSON() : null;
+    const p256dh = j?.keys?.p256dh || bufToB64url(newSub.getKey('p256dh'));
+    const auth = j?.keys?.auth || bufToB64url(newSub.getKey('auth'));
+    const r = await api('/push/subscribe', { method: 'POST', body: { endpoint: newSub.endpoint, p256dh, auth } });
+    await stashTokenForSW();
+    showToast(`🔔 알림을 켰어요 (등록된 기기 ${r.devices || 1}대)`);
+  } catch (e) {
+    showToast('❌ 알림 켜기 실패: ' + (e?.message || e));
+  }
+  refreshPushStatus();
+}
+
+async function sendTestPush() {
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  try {
+    const r = await api('/push/test', { method: 'POST' });
+    showToast(r.sent ? `🧪 ${r.sent}대에 보냈어요 — 잠시 후 알림을 확인하세요` : '등록된 기기가 없어요. 먼저 알림을 켜주세요');
+  } catch (e) { showToast('❌ ' + e.message); }
 }
 
 // ===== 카드 결제일 / 이용기간 =====

@@ -2,7 +2,7 @@
 //
 // 배포할 때마다 버전을 올린다. activate에서 옛 캐시를 지우는 유일한 방아쇠라,
 // 안 올리면 새 버전을 배포해도 사용자는 계속 옛 화면을 본다.
-const CACHE_NAME = 'gagyebu-v8';
+const CACHE_NAME = 'gagyebu-v9';
 const ASSETS = ['/', '/index.html', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -63,4 +63,62 @@ self.addEventListener('fetch', e => {
       return cached || fetchPromise;
     })
   );
+});
+
+// ===== 웹푸시 =====
+// 서버는 '깨우기'만 보낸다(페이로드 없음). 내용은 여기서 직접 받아와 문구를 만든다.
+// 앱이 구독할 때 토큰을 캐시에 넣어두므로, 서비스워커도 인증된 요청을 할 수 있다.
+const TOKEN_CACHE = 'gagyebu-push-auth';
+const TOKEN_URL = 'https://gagyebu.local/push-token';   // 캐시 안에서만 쓰는 가짜 주소(네트워크로 안 나감)
+
+async function readToken() {
+  try {
+    const c = await caches.open(TOKEN_CACHE);
+    const r = await c.match(TOKEN_URL);
+    return r ? (await r.text()) : null;
+  } catch (e) { return null; }
+}
+
+const won = (n) => '₩' + Number(n || 0).toLocaleString('ko-KR');
+
+self.addEventListener('push', e => {
+  e.waitUntil((async () => {
+    let title = '우리집 가계부';
+    let body = '새 거래가 등록됐어요';
+    try {
+      const token = await readToken();
+      if (token) {
+        const res = await fetch('/api/push/latest', { headers: { Authorization: 'Bearer ' + token } });
+        if (res.ok) {
+          const d = await res.json();
+          const t = d && d.latest;
+          if (t) {
+            const who = t.user_name ? `${t.user_name} · ` : '';
+            const card = t.card ? ` (${t.card})` : '';
+            title = `${who}${t.name}${card}`;
+            body = `${won(t.amount)} · ${t.category}`;
+          }
+        }
+      }
+    } catch (err) { /* 못 받아오면 기본 문구로 */ }
+    await self.registration.showNotification(title, {
+      body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: 'gagyebu-tx',        // 연달아 와도 알림이 쌓이지 않고 최신 것으로 바뀐다
+      renotify: true,
+      data: { url: '/' },
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil((async () => {
+    const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of all) {
+      if ('focus' in c) return c.focus();   // 이미 열려 있으면 그 창으로
+    }
+    if (clients.openWindow) return clients.openWindow('/');
+  })());
 });

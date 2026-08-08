@@ -114,6 +114,16 @@ CREATE TABLE users (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 웹푸시 구독. 브라우저가 만들어준 구독을 그대로 담는다(endpoint = 그 기기의 주소라 PRIMARY KEY).
+-- 기기마다 한 줄이므로 부부가 폰·PC를 여러 대 써도 된다. 죽은 구독(410/404)은 서버가 알아서 지운다.
+CREATE TABLE push_subscriptions (
+  endpoint   TEXT PRIMARY KEY,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  user_name  TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- 사용자 카테고리. 내장 카테고리는 앱(클라이언트)에 있고, 여기엔 사용자가 추가한 것만 담는다.
 -- 거래의 category는 문자열이라, 카테고리를 지워도 기존 거래는 그 이름 그대로 남는다(앱이 📦로 그린다).
 CREATE TABLE categories (

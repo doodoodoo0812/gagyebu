@@ -126,6 +126,65 @@ async function verifyToken(token, secret) {
   } catch { return null; }
 }
 
+// ───────── 웹푸시 (앱이 꺼져 있어도 알림) ─────────
+// 페이로드 없이 '깨우기'만 보낸다. 내용 암호화(RFC 8291)는 구현·검증이 까다로운데,
+// 페이로드 없는 푸시는 VAPID 서명만으로 되고 훨씬 튼튼하다.
+// 알림에 쓸 문구는 서비스워커가 깨어나서 /api/push/latest로 직접 받아온다.
+function b64urlToBytes(s) {
+  const bin = atob(String(s).replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(String(s).length / 4) * 4, '='));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// VAPID JWT(ES256). 푸시 서비스에 "이 서버가 맞다"고 알리는 서명.
+async function vapidAuthHeader(env, audience) {
+  const jwkRaw = env.VAPID_PRIVATE_JWK;
+  const pub = env.VAPID_PUBLIC_KEY;
+  if (!jwkRaw || !pub) return null;
+  let jwk;
+  try { jwk = JSON.parse(jwkRaw); } catch { return null; }
+
+  const key = await crypto.subtle.importKey(
+    'jwk', { ...jwk, key_ops: ['sign'], ext: true },
+    { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']
+  );
+  const header = b64url(enc.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const payload = b64url(enc.encode(JSON.stringify({
+    aud: audience,
+    exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,   // 12시간
+    sub: env.VAPID_SUBJECT || 'mailto:admin@example.com',
+  })));
+  const sigBuf = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' }, key, enc.encode(`${header}.${payload}`)
+  );
+  const jwt = `${header}.${payload}.${b64url(sigBuf)}`;
+  return { Authorization: `vapid t=${jwt}, k=${pub}` };
+}
+
+// 저장된 모든 구독에 푸시를 보낸다. 죽은 구독(404/410)은 그 자리에서 지운다.
+// 실패해도 호출한 쪽(거래 저장 등)이 실패하면 안 된다 — 알림은 거들 뿐이다.
+async function sendPushToAll(env) {
+  try {
+    if (!env.VAPID_PRIVATE_JWK || !env.VAPID_PUBLIC_KEY) return;
+    const subs = (await env.DB.prepare(`SELECT endpoint FROM push_subscriptions`).all()).results ?? [];
+    for (const s of subs) {
+      try {
+        const u = new URL(s.endpoint);
+        const auth = await vapidAuthHeader(env, `${u.protocol}//${u.host}`);
+        if (!auth) return;
+        const res = await fetch(s.endpoint, {
+          method: 'POST',
+          headers: { ...auth, TTL: '86400', 'Content-Length': '0' },
+        });
+        if (res.status === 404 || res.status === 410) {
+          await env.DB.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?1`).bind(s.endpoint).run();
+        }
+      } catch (e) { console.warn('푸시 발송 실패:', String(e?.message || e)); }
+    }
+  } catch (e) { console.warn('푸시 전체 실패:', String(e?.message || e)); }
+}
+
 // ───────── 입력 검증 ─────────
 // DB에도 CHECK 제약이 있지만(schema.sql), 여기서 먼저 걸러야 사용자가 한글 안내를 본다.
 // 형식만 보면 부족하다 — '2026-04-31'은 모양은 멀쩡하지만 달력에 없는 날이고,
@@ -612,6 +671,8 @@ export default {
            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,?9,?10)`
         ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.user_name, tx.card).run();
         const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(id).first();
+        // 등록되면 두 사람 모두에게 알림. 실패해도 저장은 이미 끝났으므로 응답을 막지 않는다.
+        await sendPushToAll(env);
         return json({ tx: row });
       }
 
@@ -644,6 +705,7 @@ export default {
           ).bind(crypto.randomUUID(), date, String(b.category), String(b.name), amt, memo, user_name, card, groupId, k, months));
         }
         await env.DB.batch(stmts);
+        await sendPushToAll(env);
         return json({ ok: true, installment_id: groupId, months, monthly_first: base + rem, monthly_rest: base });
       }
 
@@ -695,6 +757,44 @@ export default {
       // 카테고리 편집(숨김/이름/이모지/순서) 오버라이드. 두 폰이 공유해야 하므로 서버(app_settings)에 둔다
       // (localStorage 금지 — 정기지출 규칙을 같은 이유로 서버로 옮긴 전례). 내장 카테고리는 클라이언트
       // 상수라, 여기엔 '덮어쓰기'만 JSON 한 덩어리로 담는다. 거래에 저장된 category(원래 key)는 안 건드린다.
+      // ── 웹푸시 ──
+      //  공개키는 비밀이 아니다(브라우저가 구독할 때 필요). 개인키는 secret에만 있고 절대 안 나간다.
+      if (path === '/api/push/key' && request.method === 'GET') {
+        return json({ key: env.VAPID_PUBLIC_KEY || null });
+      }
+      if (path === '/api/push/subscribe' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const endpoint = String(b?.endpoint || '');
+        const p256dh = String(b?.p256dh || '');
+        const auth = String(b?.auth || '');
+        if (!/^https:\/\//.test(endpoint) || !p256dh || !auth) return json({ error: '구독 정보가 올바르지 않아요' }, 400);
+        await env.DB.prepare(
+          `INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_name) VALUES (?1,?2,?3,?4)
+           ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth, user_name=excluded.user_name`
+        ).bind(endpoint, p256dh, auth, String(session.n || '').slice(0, 40)).run();
+        const n = await env.DB.prepare(`SELECT COUNT(*) AS n FROM push_subscriptions`).first();
+        return json({ ok: true, devices: n?.n || 0 });
+      }
+      if (path === '/api/push/unsubscribe' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        await env.DB.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?1`).bind(String(b?.endpoint || '')).run();
+        return json({ ok: true });
+      }
+      // 서비스워커가 알림 문구를 만들려고 부른다. 가장 최근에 등록된 거래 한 건.
+      if (path === '/api/push/latest' && request.method === 'GET') {
+        const row = await env.DB.prepare(
+          `SELECT name, amount, category, user_name, card FROM transactions
+           WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`
+        ).first();
+        return json({ latest: row || null });
+      }
+      // 알림이 실제로 오는지 확인용(설정 화면의 '테스트 알림 보내기')
+      if (path === '/api/push/test' && request.method === 'POST') {
+        await sendPushToAll(env);
+        const n = await env.DB.prepare(`SELECT COUNT(*) AS n FROM push_subscriptions`).first();
+        return json({ ok: true, sent: n?.n || 0 });
+      }
+
       // ── 카드 설정(결제일·이용 시작일) ──
       //  한국 카드는 '쓴 달'과 '통장에서 빠지는 달'이 다르다. 카드마다 이용기간 시작일과 결제일이
       //  달라서, 이 둘을 알아야 "이번 달 실제로 나갈 돈"을 계산할 수 있다.
