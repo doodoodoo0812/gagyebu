@@ -851,6 +851,16 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
+      <div class="settings-item">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🔒</div>
+          <div>
+            <div class="settings-item-text">앱 잠금 (Face ID)</div>
+            <div class="settings-item-sub">앱을 열 때 얼굴인식으로 잠금해제 (이 기기만)</div>
+          </div>
+        </div>
+        <div class="toggle" id="applock-toggle" onclick="toggleAppLock(this)"></div>
+      </div>
       <div class="settings-item" onclick="logout()">
         <div class="settings-item-left">
           <div class="settings-item-icon">🔓</div>
@@ -1437,6 +1447,15 @@ body {
   </div>
 </div>
 
+<!-- 앱 잠금 화면 (Face ID) -->
+<div id="applock-screen" style="display:none;position:fixed;inset:0;z-index:99999;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center">
+  <div style="font-size:56px">🔒</div>
+  <div style="font-size:20px;font-weight:700;color:var(--text);font-family:var(--font-display)">우리집 가계부</div>
+  <div style="font-size:13px;color:var(--text2)">잠겨 있어요. 얼굴인식으로 열어 주세요.</div>
+  <button class="btn-primary" style="max-width:260px" onclick="unlockApp()">🙂 Face ID로 열기</button>
+  <div onclick="unlockWithPassword()" style="font-size:13px;color:var(--accent);cursor:pointer;margin-top:4px">비밀번호로 열기</div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1591,6 +1610,7 @@ async function initApp() {
         if (me?.name) localStorage.setItem('userName', me.name);
         loadSettings();
         showApp();
+        maybeLockOnOpen();   // 자동 로그인(앱 재시작)이면 잠금 걸려 있을 때 얼굴인식 요구
         enablePush({ silent: true }).catch(() => {});   // 이미 허용돼 있으면 조용히 재구독(재설치·기기변경 대비)
         return;
       } catch(e) {
@@ -1628,6 +1648,8 @@ function loadSettings() {
   // 예산 알림 토글 상태 복원. 이게 없으면 껐어도 앱을 다시 열 때마다 켜진 상태로 되돌아간다.
   const alertToggle = document.getElementById('budget-alert-toggle');
   if (alertToggle) alertToggle.classList.toggle('on', budgetAlertOn());
+  const lockToggle = document.getElementById('applock-toggle');
+  if (lockToggle) lockToggle.classList.toggle('on', appLockOn());
   // 예전에 브라우저에 저장해뒀던 Gemini 키는 이제 쓰지 않는다. 남겨두면 XSS 시 털릴 뿐이라 지운다.
   localStorage.removeItem('gemini_api_key');
   renderThemeGrids();
@@ -1695,6 +1717,7 @@ function afterAuth(r) {
   if (r.name) localStorage.setItem('userName', r.name);   // 이름의 정본은 서버가 돌려준 계정 이름
   demoMode = false;
   localStorage.setItem('demoMode', 'false');
+  appUnlocked = true;   // 방금 비밀번호로 로그인했으니 곧바로 잠그지 않는다
   document.getElementById('login-password').value = '';
   const code = document.getElementById('signup-code'); if (code) code.value = '';
   loadSettings();
@@ -1943,6 +1966,83 @@ async function loadCategories() {
   rebuildCategories();
   renderCategoryGrids();    // 예산·정기 지출의 카테고리 선택칸을 새 목록으로 갱신
 }
+
+// ===== 앱 잠금 (Face ID / 기기 생체인증) =====
+// 로그인은 90일 유지하되, 앱을 열 때마다 생체인증으로 잠금해제한다(민감정보 보호). 이 기기에서만.
+// WebAuthn 플랫폼 인증기(아이폰 Face ID)를 쓴다. 서버 검증 없는 '로컬 잠금'이라 인증 성공 자체가 해제 신호.
+// ★ 생체인증 실패/미지원으로 갇히지 않게 '비밀번호로 열기' 우회를 반드시 둔다.
+let appUnlocked = false;
+function webauthnSupported() { return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create); }
+function appLockOn() { return localStorage.getItem('applock_on') === 'true' && !!localStorage.getItem('applock_credid'); }
+function b64uEnc(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+const _rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+
+async function registerAppLock() {
+  if (!webauthnSupported()) { showToast('이 기기는 생체인증 잠금을 지원하지 않아요'); return false; }
+  const nm = localStorage.getItem('userName') || '가계부';
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: _rand(32),
+      rp: { name: '우리집 가계부' },
+      user: { id: _rand(16), name: nm, displayName: nm },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
+      timeout: 60000, attestation: 'none',
+    }});
+    if (!cred) throw new Error('취소됨');
+    localStorage.setItem('applock_credid', b64uEnc(cred.rawId));
+    localStorage.setItem('applock_on', 'true');
+    appUnlocked = true;
+    return true;
+  } catch (e) { showToast('잠금 설정 취소/실패: ' + (e?.message || e)); return false; }
+}
+function disableAppLock() { localStorage.removeItem('applock_on'); localStorage.removeItem('applock_credid'); }
+async function toggleAppLock(el) {
+  if (demoMode || !authToken) { showToast('로그인 후 사용할 수 있어요'); return; }
+  if (appLockOn()) {
+    disableAppLock(); el.classList.remove('on'); showToast('앱 잠금을 껐어요');
+  } else {
+    const ok = await registerAppLock();
+    if (ok) { el.classList.add('on'); showToast('🔒 앱 잠금 켜짐 — 다음에 열 때 얼굴인식으로 열려요'); }
+  }
+}
+function showLockScreen() { const s = document.getElementById('applock-screen'); if (s) s.style.display = 'flex'; }
+function hideLockScreen() { appUnlocked = true; const s = document.getElementById('applock-screen'); if (s) s.style.display = 'none'; }
+// 앱 열림/복귀 시 잠금 필요하면 걸고 바로 얼굴인식 시도.
+function maybeLockOnOpen() {
+  if (appLockOn() && !appUnlocked && authToken && !demoMode) { showLockScreen(); unlockApp(); }
+}
+async function unlockApp() {
+  if (!appLockOn()) { hideLockScreen(); return; }
+  if (!webauthnSupported()) { showToast('생체인증 미지원 — 비밀번호로 열어 주세요'); return; }
+  try {
+    const id = urlBase64ToUint8Array(localStorage.getItem('applock_credid'));
+    const assertion = await navigator.credentials.get({ publicKey: {
+      challenge: _rand(32),
+      allowCredentials: [{ type: 'public-key', id }],
+      userVerification: 'required',
+      timeout: 60000,
+    }});
+    if (assertion) hideLockScreen();
+  } catch (e) { showToast('잠금 해제 실패 — 다시 시도하거나 비밀번호로 열어 주세요'); }
+}
+// 생체인증이 안 될 때의 안전 우회 — 계정 비밀번호로 잠금해제(갇힘 방지).
+async function unlockWithPassword() {
+  const name = localStorage.getItem('userName') || '';
+  const pw = prompt('비밀번호로 잠금을 해제합니다.\n비밀번호(숫자)를 입력하세요.');
+  if (pw == null) return;
+  try {
+    const r = await api('/login', { method: 'POST', body: { name, password: pw } });
+    if (r?.token) { authToken = r.token; localStorage.setItem('auth_token', r.token); hideLockScreen(); showToast('열렸어요'); }
+  } catch (e) { showToast('❌ ' + (e?.message || '비밀번호가 맞지 않아요')); }
+}
+// 앱을 나갔다 오면 다시 잠근다(재개 시 얼굴인식).
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { appUnlocked = false; }
+  else { maybeLockOnOpen(); }
+});
 
 // ===== 웹푸시 (앱이 꺼져 있어도 알림) =====
 // 아이폰은 '홈 화면에 추가'로 설치한 상태에서만 웹푸시가 동작한다(사파리 탭에서는 안 온다).
@@ -3851,6 +3951,8 @@ async function exportAllToExcel() {
 
 function exportExcel(data, filename) {
   if (!data.length) { showToast('내보낼 데이터가 없어요'); return; }
+  // 모든 Excel 다운로드는 실수 방지를 위해 한 번 더 물어본다(단일 지점).
+  if (!confirm(`'${filename}.xlsx' 파일을 다운로드할까요?`)) return;
   const rows = data.map(t => ({
     '날짜': t.date, '유형': t.type==='expense'?'지출':'수입',
     '카테고리': t.category, '항목': t.name,
@@ -3880,6 +3982,7 @@ function exportExcel(data, filename) {
 // ===== JSON 백업 / 복원 (사진 포함) =====
 // Excel은 사진을 못 담는다. 영수증까지 통째로 지키려면 이 JSON 백업이 유일한 방법이라 별도로 둔다.
 async function exportBackup() {
+  if (!confirm('백업 파일(JSON)을 다운로드할까요?')) return;
   showToast('⏳ 백업을 준비하는 중…');
   let data;
   try {
@@ -4841,8 +4944,7 @@ function openMonthlyReport() {
 }
 
 function exportReportToExcel() {
-  // 실수로 눌러 받아지는 걸 막으려 한 번 더 물어본다.
-  if (!confirm('이번 달 내역을 Excel 파일로 저장할까요?')) return;
+  // 확인창은 exportExcel(단일 지점)에서 물어본다.
   exportToExcel();
   closeModal('report-modal');
 }
