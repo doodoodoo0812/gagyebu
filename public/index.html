@@ -719,6 +719,12 @@ body {
       </div>
     </div>
 
+    <!-- 바로가기: 마감 리포트 · 정기 지출 (설정에서 홈으로 옮김) -->
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <button class="btn-secondary" onclick="openMonthlyReport()" style="margin:0;flex:1;padding:11px;font-size:13px">📋 마감 리포트</button>
+      <button class="btn-secondary" onclick="openRecurringManage()" style="margin:0;flex:1;padding:11px;font-size:13px">🔁 정기 지출</button>
+    </div>
+
     <div class="card">
       <div class="card-header">
         <div class="card-title">이번 달 지출 vs 지난 달</div>
@@ -899,16 +905,6 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
-      <div class="settings-item" onclick="openMonthlyReport()">
-        <div class="settings-item-left">
-          <div class="settings-item-icon">📋</div>
-          <div>
-            <div class="settings-item-text">이번달 마감 리포트</div>
-            <div class="settings-item-sub">월간 요약 리포트 보기</div>
-          </div>
-        </div>
-        <div class="settings-item-right">›</div>
-      </div>
       <div class="settings-item" onclick="openAiModal()">
         <div class="settings-item-left">
           <div class="settings-item-icon">🤖</div>
@@ -965,11 +961,6 @@ body {
       </div>
     </div>
 
-    <div class="settings-section">
-      <div class="settings-title">정기 지출</div>
-      <div id="recurring-list"></div>
-      <button class="btn-secondary" onclick="openRecurringModal()">+ 정기 지출 추가</button>
-    </div>
 
     <div class="settings-section">
       <div class="settings-title">데이터</div>
@@ -1404,6 +1395,18 @@ body {
     </div>
     <button class="btn-primary" id="pass-save-btn" onclick="changePassword()">변경하기</button>
     <button class="btn-secondary" onclick="closeModal('pass-modal')">취소</button>
+  </div>
+</div>
+
+<!-- 정기 지출 관리 모달 -->
+<div class="modal-backdrop" id="recurring-mgmt-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🔁 정기 지출</div>
+    <p style="font-size:12px;color:var(--text2);line-height:1.6;margin:0 0 12px">매달 자동으로 등록되는 지출(관리비·구독료 등)이에요.</p>
+    <div id="recurring-list"></div>
+    <button class="btn-secondary" onclick="openRecurringModal()" style="margin-top:8px">+ 정기 지출 추가</button>
+    <button class="btn-secondary" onclick="closeModal('recurring-mgmt-modal')" style="margin-top:8px">닫기</button>
   </div>
 </div>
 
@@ -3724,6 +3727,8 @@ async function saveBudget() {
 // 규칙은 서버(D1)에 둔다. 예전엔 각자 폰의 localStorage에만 있어서 한쪽이 지워도
 // 다른 쪽 폰이 계속 등록해댔고, 원인이 배우자 폰이라는 걸 화면만 봐선 알 수 없었다.
 function openRecurringModal() { renderCategoryGrids(); openModal('recurring-modal'); }
+// 정기 지출 관리(목록+추가) — 설정에서 홈 바로가기로 옮겼다.
+function openRecurringManage() { renderRecurringList(); openModal('recurring-mgmt-modal'); }
 
 async function loadRecurring() {
   if (demoMode) {
@@ -4836,6 +4841,8 @@ function openMonthlyReport() {
 }
 
 function exportReportToExcel() {
+  // 실수로 눌러 받아지는 걸 막으려 한 번 더 물어본다.
+  if (!confirm('이번 달 내역을 Excel 파일로 저장할까요?')) return;
   exportToExcel();
   closeModal('report-modal');
 }
