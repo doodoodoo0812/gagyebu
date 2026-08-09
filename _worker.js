@@ -713,6 +713,28 @@ export default {
         return json({ tx: row });
       }
 
+      // ── 이월 카드값(앱 시작 전에 쌓인 카드값) 일괄 등록 ──
+      //  결제 예정일에 '카드대금' 지출로 넣는다. card 컬럼은 비운다 — 카드로 넣으면 결제월 재계산(billingMonthOf)에
+      //  휘말려 다른 달로 밀린다. 카드사 이름은 항목명에 담아 어느 카드인지 보이게 한다. 대량이라 푸시는 안 보낸다.
+      if (path === '/api/carryover' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const items = Array.isArray(b?.items) ? b.items.slice(0, 100) : [];
+        const user_name = String(session?.n ?? '').slice(0, 40);   // 로그인한 사람으로 귀속
+        const stmts = [];
+        for (const it of items) {
+          const amount = Math.floor(Number(it?.amount));
+          const card = String(it?.card ?? '').trim().slice(0, 20);
+          if (!isDate(it?.date) || !card) continue;
+          if (!Number.isInteger(amount) || amount <= 0 || amount >= 100000000000) continue;
+          stmts.push(env.DB.prepare(
+            `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name,card)
+             VALUES (?1,?2,'expense','카드대금',?3,?4,'이월 카드값',NULL,0,?5,NULL)`
+          ).bind(crypto.randomUUID(), it.date, `${card} 카드대금`, amount, user_name));
+        }
+        if (stmts.length) await env.DB.batch(stmts);
+        return json({ ok: true, added: stmts.length });
+      }
+
       // ── 무이자 할부 등록 ──
       //  N개월치 거래를 각 달에 미리 만들어 같은 installment_id로 묶는다. 그러면 매달 그 달 목록/통계/예산에
       //  자동으로 뜨고(다음 달에도 계속 표시), N개월 지나면 더 안 생긴다. 취소는 그룹을 한 번에.

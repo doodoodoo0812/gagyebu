@@ -943,6 +943,16 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
+      <div class="settings-item" onclick="openCarryoverModal()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🧾</div>
+          <div>
+            <div class="settings-item-text">이월 카드값 입력 (앱 시작 시점)</div>
+            <div class="settings-item-sub">앱 쓰기 전 쌓인 카드값 — 결제 예정일·카드사·금액을 한 번에</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
       <div class="settings-item" onclick="openCategoryModal()">
         <div class="settings-item-left">
           <div class="settings-item-icon">🏷️</div>
@@ -1393,6 +1403,33 @@ body {
     </div>
     <button class="btn-primary" id="pass-save-btn" onclick="changePassword()">변경하기</button>
     <button class="btn-secondary" onclick="closeModal('pass-modal')">취소</button>
+  </div>
+</div>
+
+<!-- 이월 카드값 입력 모달 -->
+<div class="modal-backdrop" id="carryover-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🧾 이월 카드값 입력</div>
+    <p style="font-size:12px;color:var(--text2);line-height:1.6;margin:0 0 14px">
+      앱 쓰기 전에 쌓인 카드값을 <b>결제 예정일</b>에 지출로 넣어요. 카드사·날짜·금액을 고르고 '목록에 추가'를 누르면 아래에 쌓이고, '전체 등록'으로 한 번에 저장됩니다.
+    </p>
+    <div class="form-group">
+      <label class="form-label">카드사</label>
+      <select class="form-select" id="co-card"></select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">결제 예정일 <span id="co-date-dow" style="color:var(--accent);font-weight:700"></span></label>
+      <input class="form-input" id="co-date" type="date" onchange="updateCoDow()" oninput="updateCoDow()">
+    </div>
+    <div class="form-group">
+      <label class="form-label">금액</label>
+      <input class="form-input amount" id="co-amount" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0" oninput="fmtMoneyInput(this)">
+    </div>
+    <button class="btn-secondary" onclick="addCarryoverRow()" style="margin-top:0">+ 목록에 추가</button>
+    <div id="co-list" style="margin-top:12px"></div>
+    <button class="btn-primary" id="co-submit-btn" onclick="submitCarryover()" style="margin-top:12px">전체 등록</button>
+    <button class="btn-secondary" onclick="closeModal('carryover-modal')" style="margin-top:8px">닫기</button>
   </div>
 </div>
 
@@ -2490,6 +2527,75 @@ function updateTxDow() {
   if (!v) { el.textContent = ''; return; }
   const d = new Date(v + 'T00:00:00');
   el.textContent = isNaN(d.getTime()) ? '' : `(${DOW_KO[d.getDay()]})`;
+}
+
+// ===== 이월 카드값(앱 시작 전에 이미 쌓인 카드값) =====
+// 결제 예정일에 '카드대금' 지출로 넣는다. card 컬럼은 비운다 — 카드로 넣으면 결제월 재계산에 휘말려
+// 다른 달로 밀리기 때문. 카드사 이름은 항목명에 담아 어느 카드인지 보이게 한다.
+let carryoverList = [];
+function openCarryoverModal() {
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  carryoverList = [];
+  const sel = document.getElementById('co-card');
+  sel.innerHTML = (cardSettings || []).map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('') || '<option value="">카드</option>';
+  document.getElementById('co-date').value = todayLocal();
+  document.getElementById('co-amount').value = '';
+  updateCoDow();
+  renderCarryoverList();
+  openModal('carryover-modal');
+}
+function updateCoDow() {
+  const el = document.getElementById('co-date-dow'); if (!el) return;
+  const v = document.getElementById('co-date')?.value;
+  const d = v ? new Date(v + 'T00:00:00') : null;
+  el.textContent = (d && !isNaN(d.getTime())) ? `(${DOW_KO[d.getDay()]})` : '';
+}
+function addCarryoverRow() {
+  const card = document.getElementById('co-card').value;
+  const date = document.getElementById('co-date').value;
+  const amount = parseInt((document.getElementById('co-amount').value || '').replace(/[^0-9]/g, ''), 10);
+  if (!card) { showToast('카드사를 골라 주세요'); return; }
+  if (!date) { showToast('결제 예정일을 넣어 주세요'); return; }
+  if (!amount || amount <= 0) { showToast('금액을 넣어 주세요'); return; }
+  carryoverList.push({ card, date, amount });
+  document.getElementById('co-amount').value = '';   // 연속 입력 편하게
+  renderCarryoverList();
+}
+function removeCarryoverRow(i) { carryoverList.splice(i, 1); renderCarryoverList(); }
+function renderCarryoverList() {
+  const box = document.getElementById('co-list');
+  if (!box) return;
+  if (!carryoverList.length) {
+    box.innerHTML = `<div style="font-size:12px;color:var(--text3);padding:6px 2px">아직 추가한 게 없어요. 위에서 골라 '목록에 추가'를 누르세요.</div>`;
+    return;
+  }
+  const total = carryoverList.reduce((s, r) => s + r.amount, 0);
+  box.innerHTML = carryoverList.map((r, i) => {
+    const dow = DOW_KO[new Date(r.date + 'T00:00:00').getDay()] || '';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--surface2);border-radius:8px;padding:8px 10px;margin-bottom:6px">
+      <div style="min-width:0">
+        <div style="font-size:13px;color:var(--text);font-weight:600">${esc(r.card)} · ${esc(r.date)} (${dow})</div>
+        <div style="font-size:13px;color:var(--expense);font-family:var(--font-mono)">${fmtMoney(r.amount)}</div>
+      </div>
+      <button onclick="removeCarryoverRow(${i})" style="flex-shrink:0;padding:4px 10px;font-size:11px;border:1px solid var(--expense);border-radius:6px;background:transparent;color:var(--expense);cursor:pointer">빼기</button>
+    </div>`;
+  }).join('') + `<div style="text-align:right;font-size:13px;font-weight:700;color:var(--text);margin-top:8px">합계 ${fmtMoney(total)} · ${carryoverList.length}건</div>`;
+}
+async function submitCarryover() {
+  if (!carryoverList.length) { showToast('먼저 목록에 추가해 주세요'); return; }
+  const btn = document.getElementById('co-submit-btn');
+  btn.disabled = true; btn.textContent = '등록 중…';
+  try {
+    // '카드대금' 카테고리가 💳로 보이도록 없으면 만든다(이미 있으면 409 → 무시).
+    try { await api('/categories', { method: 'POST', body: { type: 'expense', name: '카드대금', emoji: '💳' } }); } catch (e) {}
+    const r = await api('/carryover', { method: 'POST', body: { items: carryoverList } });
+    showToast(`✅ 이월 카드값 ${r.added || 0}건 등록했어요`);
+    carryoverList = [];
+    closeModal('carryover-modal');
+    await loadCategories();   // 새 카테고리 반영
+    await loadData();
+  } catch (e) { showToast('❌ ' + e.message); }
+  finally { btn.disabled = false; btn.textContent = '전체 등록'; }
 }
 
 function monthStrOffset(delta) {
