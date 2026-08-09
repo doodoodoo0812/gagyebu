@@ -1127,7 +1127,8 @@ body {
       <label class="form-label">카드 / 할부 <span style="color:var(--text3);font-weight:400">(선택)</span></label>
       <div style="display:flex;gap:8px">
         <select class="form-select" id="tx-card" style="flex:1">
-          <option value="">카드사 없음</option>
+          <option value="">카드/현금 선택 안 함</option>
+          <option value="현금">💵 현금</option>
           <option>신한</option><option>삼성</option><option>현대</option><option>국민</option>
           <option>롯데</option><option>하나</option><option>우리</option><option>BC</option>
           <option>농협</option><option>카카오뱅크</option><option>기타</option>
@@ -2178,8 +2179,9 @@ function outflowTxFor(year, monthIdx) {
 // 이번 달 통장에서 '실제로 빠지는 돈' — 카드값 + 현금·이체
 function monthOutflow(year, monthIdx) {
   const items = outflowTxFor(year, monthIdx);
-  const cards = items.filter(t => t.card).reduce((s, t) => s + t.amount, 0);
-  const nonCardItems = items.filter(t => !t.card);
+  // '현금'은 카드가 아니라 현금·이체로 센다(카드값 집계에 섞이지 않게).
+  const cards = items.filter(t => t.card && t.card !== '현금').reduce((s, t) => s + t.amount, 0);
+  const nonCardItems = items.filter(t => !t.card || t.card === '현금');
   const nonCard = nonCardItems.reduce((s, t) => s + t.amount, 0);
   return {
     cards, nonCard, total: cards + nonCard,
