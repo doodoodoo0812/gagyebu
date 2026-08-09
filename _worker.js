@@ -164,25 +164,46 @@ async function vapidAuthHeader(env, audience) {
 
 // 저장된 모든 구독에 푸시를 보낸다. 죽은 구독(404/410)은 그 자리에서 지운다.
 // 실패해도 호출한 쪽(거래 저장 등)이 실패하면 안 된다 — 알림은 거들 뿐이다.
+// 무엇이 어떻게 됐는지 돌려준다 — 알림이 안 올 때 원인을 화면에서 바로 볼 수 있어야 한다.
+// (조용히 실패하면 "왜 안 오지?"를 영영 못 푼다. 실제로 그런 일을 한 번 겪었다.)
 async function sendPushToAll(env) {
+  const report = { keys: false, sent: 0, results: [] };
   try {
-    if (!env.VAPID_PRIVATE_JWK || !env.VAPID_PUBLIC_KEY) return;
+    if (!env.VAPID_PRIVATE_JWK || !env.VAPID_PUBLIC_KEY) {
+      report.error = 'VAPID 키가 서버에 없어요';
+      return report;
+    }
+    report.keys = true;
     const subs = (await env.DB.prepare(`SELECT endpoint FROM push_subscriptions`).all()).results ?? [];
     for (const s of subs) {
+      const host = (() => { try { return new URL(s.endpoint).host; } catch { return '?'; } })();
       try {
         const u = new URL(s.endpoint);
         const auth = await vapidAuthHeader(env, `${u.protocol}//${u.host}`);
-        if (!auth) return;
+        if (!auth) { report.results.push({ host, error: 'VAPID 서명 실패' }); continue; }
         const res = await fetch(s.endpoint, {
           method: 'POST',
           headers: { ...auth, TTL: '86400', 'Content-Length': '0' },
         });
-        if (res.status === 404 || res.status === 410) {
+        // 401/403 = VAPID가 거부됨(키·서명 문제). 404/410 = 죽은 구독. 201/200 = 접수됨.
+        let detail = '';
+        if (!res.ok) { try { detail = (await res.text()).slice(0, 160); } catch (e) {} }
+        report.results.push({ host, status: res.status, detail });
+        if (res.ok) report.sent++;
+        // 애플은 죽은 구독에 400 BadWebPushToken을 준다(404/410이 아니다). 이것도 영구 무효라 지운다.
+        const appleDead = res.status === 400 && /BadWebPushToken|BadDeviceToken/i.test(detail);
+        if (res.status === 404 || res.status === 410 || appleDead) {
           await env.DB.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?1`).bind(s.endpoint).run();
+          report.results[report.results.length - 1].removed = true;
         }
-      } catch (e) { console.warn('푸시 발송 실패:', String(e?.message || e)); }
+      } catch (e) {
+        report.results.push({ host, error: String(e?.message || e).slice(0, 160) });
+      }
     }
-  } catch (e) { console.warn('푸시 전체 실패:', String(e?.message || e)); }
+  } catch (e) {
+    report.error = String(e?.message || e).slice(0, 160);
+  }
+  return report;
 }
 
 // ───────── 입력 검증 ─────────
@@ -790,9 +811,9 @@ export default {
       }
       // 알림이 실제로 오는지 확인용(설정 화면의 '테스트 알림 보내기')
       if (path === '/api/push/test' && request.method === 'POST') {
-        await sendPushToAll(env);
         const n = await env.DB.prepare(`SELECT COUNT(*) AS n FROM push_subscriptions`).first();
-        return json({ ok: true, sent: n?.n || 0 });
+        const report = await sendPushToAll(env);
+        return json({ ok: true, devices: n?.n || 0, ...report });
       }
 
       // ── 카드 설정(결제일·이용 시작일) ──
