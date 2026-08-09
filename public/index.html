@@ -658,8 +658,8 @@ body {
     </div>
     <div class="form-group">
       <label class="form-label">비밀번호</label>
-      <input class="form-input" id="login-password" type="password" placeholder="내 비밀번호"
-             autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuth()">
+      <input class="form-input" id="login-password" type="password" inputmode="numeric" pattern="[0-9]*"
+             placeholder="내 비밀번호(숫자)" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuth()">
     </div>
     <div id="reset-hint" style="display:none;font-size:12px;color:var(--text2);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:10px;line-height:1.5">
       🔑 이름과 <b>가입 코드</b>를 확인하고 <b>새 비밀번호</b>로 바꿉니다. 바꾸면 바로 로그인돼요.</div>
@@ -1380,15 +1380,15 @@ body {
     <div id="pass-account-line" style="font-size:13px;color:var(--text2);margin-bottom:14px"></div>
     <div class="form-group">
       <label class="form-label">현재 비밀번호</label>
-      <input class="form-input" id="pass-current" type="password" autocomplete="current-password">
+      <input class="form-input" id="pass-current" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password">
     </div>
     <div class="form-group">
-      <label class="form-label">새 비밀번호 (4자 이상)</label>
-      <input class="form-input" id="pass-new" type="password" autocomplete="new-password">
+      <label class="form-label">새 비밀번호 (숫자 4자리 이상)</label>
+      <input class="form-input" id="pass-new" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="new-password">
     </div>
     <div class="form-group">
       <label class="form-label">새 비밀번호 확인</label>
-      <input class="form-input" id="pass-new2" type="password" autocomplete="new-password"
+      <input class="form-input" id="pass-new2" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="new-password"
              onkeydown="if(event.key==='Enter')changePassword()">
     </div>
     <button class="btn-primary" id="pass-save-btn" onclick="changePassword()">변경하기</button>
@@ -1631,7 +1631,7 @@ function setAuthMode(mode) {
     authMode === 'signup' ? '✨ 계정 만들기' : authMode === 'reset' ? '🔑 비밀번호 재설정' : '🔓 들어가기';
   const pw = document.getElementById('login-password');
   pw.setAttribute('autocomplete', authMode === 'login' ? 'current-password' : 'new-password');
-  pw.setAttribute('placeholder', authMode === 'reset' ? '새 비밀번호 (4자 이상)' : authMode === 'signup' ? '쓸 비밀번호 (4자 이상)' : '내 비밀번호');
+  pw.setAttribute('placeholder', authMode === 'reset' ? '새 비밀번호 (숫자 4자리 이상)' : authMode === 'signup' ? '쓸 비밀번호 (숫자 4자리 이상)' : '내 비밀번호(숫자)');
   // '비밀번호를 잊으셨나요?' 링크는 로그인 모드에서만.
   const forgot = document.getElementById('forgot-link');
   if (forgot) forgot.style.display = (authMode === 'login') ? '' : 'none';
@@ -1680,7 +1680,7 @@ async function signup() {
   const pw = document.getElementById('login-password').value;
   const code = document.getElementById('signup-code').value;
   if (!name) { showToast('이름을 입력해 주세요'); return; }
-  if (pw.length < 4) { showToast('비밀번호는 4자 이상으로 정해 주세요'); return; }
+  if (!/^\d{4,}$/.test(pw)) { showToast('비밀번호는 숫자로만, 4자리 이상으로 정해 주세요'); return; }
   if (!code) { showToast('가입 코드를 입력해 주세요'); return; }
   const btn = document.getElementById('login-btn');
   btn.disabled = true; btn.textContent = '만드는 중…';
@@ -1700,7 +1700,7 @@ async function resetPassword() {
   const pw = document.getElementById('login-password').value;
   const code = document.getElementById('signup-code').value;
   if (!name) { showToast('이름을 입력해 주세요'); return; }
-  if (pw.length < 4) { showToast('새 비밀번호는 4자 이상으로 정해 주세요'); return; }
+  if (!/^\d{4,}$/.test(pw)) { showToast('새 비밀번호는 숫자로만, 4자리 이상으로 정해 주세요'); return; }
   if (!code) { showToast('가입 코드를 입력해 주세요'); return; }
   const btn = document.getElementById('login-btn');
   btn.disabled = true; btn.textContent = '변경 중…';
@@ -3854,7 +3854,7 @@ async function changePassword() {
   const nw = document.getElementById('pass-new').value;
   const nw2 = document.getElementById('pass-new2').value;
   if (!cur) { showToast('현재 비밀번호를 입력해 주세요'); return; }
-  if (nw.length < 4) { showToast('새 비밀번호는 4자 이상으로 정해 주세요'); return; }
+  if (!/^\d{4,}$/.test(nw)) { showToast('새 비밀번호는 숫자로만, 4자리 이상으로 정해 주세요'); return; }
   if (nw !== nw2) { showToast('새 비밀번호가 서로 달라요'); return; }
   const btn = document.getElementById('pass-save-btn');
   btn.disabled = true; btn.textContent = '변경 중…';

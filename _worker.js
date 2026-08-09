@@ -528,7 +528,7 @@ export default {
         const name = String(b?.name ?? '').trim().slice(0, 40);
         const password = String(b?.password ?? '');
         if (name.length < 1) return json({ error: '이름을 입력해 주세요' }, 400);
-        if (password.length < 4) return json({ error: '비밀번호는 4자 이상으로 정해 주세요' }, 400);
+        if (!/^\d{4,}$/.test(password)) return json({ error: '비밀번호는 숫자로만, 4자리 이상으로 정해 주세요' }, 400);
         const dup = await env.DB.prepare(`SELECT id FROM users WHERE name = ?1`).bind(name).first();
         if (dup) return json({ error: '이미 있는 이름이에요. 로그인해 주세요' }, 409);
         const { salt, hash } = await hashPassword(password);
@@ -576,7 +576,7 @@ export default {
         if (!safeEqual(b?.code ?? '', env.APP_PASSWORD)) return json({ error: '가입 코드가 맞지 않아요' }, 401);
         const name = String(b?.name ?? '').trim().slice(0, 40);
         const password = String(b?.password ?? '');
-        if (password.length < 4) return json({ error: '새 비밀번호는 4자 이상으로 정해 주세요' }, 400);
+        if (!/^\d{4,}$/.test(password)) return json({ error: '새 비밀번호는 숫자로만, 4자리 이상으로 정해 주세요' }, 400);
         const u = name ? await env.DB.prepare(`SELECT id, name FROM users WHERE name = ?1`).bind(name).first() : null;
         // 여기선 코드로 이미 본인임을 증명했으므로 '없는 이름'을 알려줘도 된다(도움이 됨).
         if (!u) return json({ error: '그 이름의 계정이 없어요. 이름을 확인해 주세요' }, 404);
@@ -602,7 +602,7 @@ export default {
         }
         const current = String(b?.current ?? '');
         const next = String(b?.next ?? '');
-        if (next.length < 4) return json({ error: '새 비밀번호는 4자 이상으로 정해 주세요' }, 400);
+        if (!/^\d{4,}$/.test(next)) return json({ error: '새 비밀번호는 숫자로만, 4자리 이상으로 정해 주세요' }, 400);
         const u = await env.DB.prepare(`SELECT salt, hash FROM users WHERE id = ?1`).bind(session.u).first();
         if (!u) return json({ error: '계정을 찾을 수 없어요. 다시 로그인해 주세요' }, 404);
         const cur = await hashPassword(current, u.salt);
