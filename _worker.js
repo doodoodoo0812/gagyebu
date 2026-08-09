@@ -206,6 +206,22 @@ async function sendPushToAll(env) {
   return report;
 }
 
+// 마지막 동작(등록/삭제)을 app_settings에 남기고 모두에게 푸시를 보낸다.
+// 서비스워커는 /api/push/latest 로 이 값을 읽어 알림 문구를 만든다(삭제도 올바른 문구가 나오게).
+async function recordAndPush(env, ev) {
+  try {
+    await setSetting(env, 'push_latest', JSON.stringify({
+      kind: ev.kind || 'add',
+      name: String(ev.name ?? '').slice(0, 100),
+      amount: Number(ev.amount) || 0,
+      category: String(ev.category ?? '').slice(0, 40),
+      user_name: String(ev.user_name ?? '').slice(0, 40),
+      card: ev.card ? String(ev.card).slice(0, 20) : '',
+    }));
+  } catch (e) { /* 기록 실패해도 푸시는 보낸다 */ }
+  return await sendPushToAll(env);
+}
+
 // ───────── 입력 검증 ─────────
 // DB에도 CHECK 제약이 있지만(schema.sql), 여기서 먼저 걸러야 사용자가 한글 안내를 본다.
 // 형식만 보면 부족하다 — '2026-04-31'은 모양은 멀쩡하지만 달력에 없는 날이고,
@@ -693,7 +709,7 @@ export default {
         ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.user_name, tx.card).run();
         const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(id).first();
         // 등록되면 두 사람 모두에게 알림. 실패해도 저장은 이미 끝났으므로 응답을 막지 않는다.
-        await sendPushToAll(env);
+        await recordAndPush(env, { kind: 'add', name: tx.name, amount: tx.amount, category: tx.category, user_name: tx.user_name, card: tx.card });
         return json({ tx: row });
       }
 
@@ -726,7 +742,7 @@ export default {
           ).bind(crypto.randomUUID(), date, String(b.category), String(b.name), amt, memo, user_name, card, groupId, k, months));
         }
         await env.DB.batch(stmts);
-        await sendPushToAll(env);
+        await recordAndPush(env, { kind: 'add', name: `${b.name} (${months}개월 할부)`, amount: total, category: String(b.category), user_name, card });
         return json({ ok: true, installment_id: groupId, months, monthly_first: base + rem, monthly_rest: base });
       }
 
@@ -803,11 +819,14 @@ export default {
       }
       // 서비스워커가 알림 문구를 만들려고 부른다. 가장 최근에 등록된 거래 한 건.
       if (path === '/api/push/latest' && request.method === 'GET') {
+        // 마지막 '동작'(등록/삭제)을 돌려준다. 없으면(옛 배포 직후) 최신 거래로 대체.
+        const raw = await getSetting(env, 'push_latest');
+        if (raw) { const ev = safeParse(raw); if (ev) return json({ latest: ev }); }
         const row = await env.DB.prepare(
           `SELECT name, amount, category, user_name, card FROM transactions
            WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`
         ).first();
-        return json({ latest: row || null });
+        return json({ latest: row ? { ...row, kind: 'add' } : null });
       }
       // 알림이 실제로 오는지 확인용(설정 화면의 '테스트 알림 보내기')
       if (path === '/api/push/test' && request.method === 'POST') {
@@ -961,10 +980,14 @@ export default {
       // ── 할부 전체 취소 (그룹 소프트삭제) ── 남은 회차까지 한 번에 휴지통으로.
       if (path.startsWith('/api/installment/') && request.method === 'DELETE') {
         const gid = decodeURIComponent(path.slice('/api/installment/'.length));
+        const one = await env.DB.prepare(
+          `SELECT name, amount, category, user_name, card, installment_months FROM transactions WHERE installment_id = ?1 AND deleted_at IS NULL LIMIT 1`
+        ).bind(gid).first();
         const r = await env.DB.prepare(
           `UPDATE transactions SET deleted_at = datetime('now') WHERE installment_id = ?1 AND deleted_at IS NULL`
         ).bind(gid).run();
         if (!r.meta.changes) return json({ error: '취소할 할부를 찾지 못했어요' }, 404);
+        if (one) await recordAndPush(env, { kind: 'delete', name: `${one.name} (할부 취소)`, amount: one.amount, category: one.category, user_name: one.user_name, card: one.card });
         return json({ ok: true, cancelled: r.meta.changes });
       }
 
@@ -1002,10 +1025,16 @@ export default {
       // 삭제는 '소프트 삭제' — 바로 지우지 않고 deleted_at만 찍는다. 30일 뒤 /api/data 로드 때 완전삭제된다.
       // 실수로 지워도 휴지통에서 되살릴 수 있게. (예전엔 하드 삭제라 복구가 아예 불가능했다)
       if (txId && request.method === 'DELETE') {
+        // 삭제 전 정보를 미리 읽어둔다(알림 문구용). 삭제 후엔 화면에서 사라진다.
+        const gone = await env.DB.prepare(
+          `SELECT name, amount, category, user_name, card FROM transactions WHERE id = ?1 AND deleted_at IS NULL`
+        ).bind(txId).first();
         const r = await env.DB.prepare(
           `UPDATE transactions SET deleted_at = datetime('now') WHERE id = ?1 AND deleted_at IS NULL`
         ).bind(txId).run();
         if (!r.meta.changes) return json({ error: '삭제할 거래를 찾지 못했어요' }, 404);
+        // 삭제도 두 사람에게 알림.
+        if (gone) await recordAndPush(env, { kind: 'delete', ...gone });
         return json({ ok: true });
       }
 

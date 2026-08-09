@@ -2,7 +2,7 @@
 //
 // 배포할 때마다 버전을 올린다. activate에서 옛 캐시를 지우는 유일한 방아쇠라,
 // 안 올리면 새 버전을 배포해도 사용자는 계속 옛 화면을 본다.
-const CACHE_NAME = 'gagyebu-v10';
+const CACHE_NAME = 'gagyebu-v11';
 const ASSETS = ['/', '/index.html', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -95,8 +95,9 @@ self.addEventListener('push', e => {
           if (t) {
             const who = t.user_name ? `${t.user_name} · ` : '';
             const card = t.card ? ` (${t.card})` : '';
+            const verb = t.kind === 'delete' ? '🗑️ 삭제됨' : '✍️ 등록됨';
             title = `${who}${t.name}${card}`;
-            body = `${won(t.amount)} · ${t.category}`;
+            body = `${verb} · ${won(t.amount)} · ${t.category}`;
           }
         }
       }

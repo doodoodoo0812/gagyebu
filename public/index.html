@@ -863,7 +863,7 @@ body {
         <div class="settings-item-left">
           <div class="settings-item-icon">📣</div>
           <div>
-            <div class="settings-item-text">새 거래 알림 (앱이 꺼져 있어도)</div>
+            <div class="settings-item-text">거래 등록·삭제 알림 (앱이 꺼져 있어도)</div>
             <div class="settings-item-sub" id="push-status">확인 중…</div>
           </div>
         </div>
@@ -1152,8 +1152,8 @@ body {
     </div>
 
     <div class="form-group">
-      <label class="form-label">날짜</label>
-      <input class="form-input" id="tx-date" type="date">
+      <label class="form-label">날짜 <span id="tx-date-dow" style="color:var(--accent);font-weight:700"></span></label>
+      <input class="form-input" id="tx-date" type="date" onchange="updateTxDow()" oninput="updateTxDow()">
     </div>
 
     <div class="form-group">
@@ -1550,6 +1550,7 @@ async function initApp() {
         if (me?.name) localStorage.setItem('userName', me.name);
         loadSettings();
         showApp();
+        enablePush({ silent: true }).catch(() => {});   // 이미 허용돼 있으면 조용히 재구독(재설치·기기변경 대비)
         return;
       } catch(e) {
         // 만료·무효 → 아래 로그인 화면으로
@@ -1657,6 +1658,9 @@ function afterAuth(r) {
   const code = document.getElementById('signup-code'); if (code) code.value = '';
   loadSettings();
   showApp();
+  // 로그인하면 알림을 기본으로 켠다(로그인 버튼 탭 직후라 권한을 물어도 브라우저가 허용).
+  // 이미 켜져 있거나 권한이 없으면 조용히 넘어간다.
+  enablePush({ toast: false }).then(() => { try { refreshPushStatus(); } catch(e){} }).catch(() => {});
 }
 
 async function login() {
@@ -1984,12 +1988,26 @@ async function togglePush() {
     return;
   }
 
-  // 켜기 — 권한은 반드시 사용자가 누른 그 순간에 물어야 한다(나중에 물으면 브라우저가 막는다).
+  await enablePush({ toast: true });   // 켜기
+  refreshPushStatus();
+}
+
+// 알림 켜기(구독). 로그인하면 자동으로 켜지도록 별도 함수로 뺐다.
+//  - silent=true : 권한이 아직 '미결정'이면 물어보지 않고 조용히 건너뛴다(자동 로그인·앱 재시작용).
+//  - toast=true  : 성공/실패를 안내한다(설정에서 직접 켤 때).
+//  이미 켜져 있으면 아무것도 안 한다. 권한이 '차단'이면 손댈 수 없어 건너뛴다.
+async function enablePush({ silent = false, toast = false } = {}) {
   try {
-    const perm = await Notification.requestPermission();
-    if (perm !== 'granted') { showToast('알림 권한이 필요해요'); refreshPushStatus(); return; }
+    if (!pushSupported() || demoMode || !authToken) return false;
+    if (await currentPushSub()) return true;                  // 이미 켜짐
+    if (Notification.permission === 'denied') return false;   // 차단됨
+    if (Notification.permission !== 'granted') {
+      if (silent) return false;                               // 자동일 땐 안 물어봄
+      const perm = await Notification.requestPermission();    // 로그인 버튼 탭 직후라 물어봐도 된다
+      if (perm !== 'granted') { if (toast) showToast('알림 권한이 필요해요'); return false; }
+    }
     const { key } = await api('/push/key');
-    if (!key) { showToast('서버에 알림 키가 없어요'); return; }
+    if (!key) { if (toast) showToast('서버에 알림 키가 없어요'); return false; }
     const reg = await navigator.serviceWorker.ready;
     const newSub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
@@ -2000,11 +2018,9 @@ async function togglePush() {
     const auth = j?.keys?.auth || bufToB64url(newSub.getKey('auth'));
     const r = await api('/push/subscribe', { method: 'POST', body: { endpoint: newSub.endpoint, p256dh, auth } });
     await stashTokenForSW();
-    showToast(`🔔 알림을 켰어요 (등록된 기기 ${r.devices || 1}대)`);
-  } catch (e) {
-    showToast('❌ 알림 켜기 실패: ' + (e?.message || e));
-  }
-  refreshPushStatus();
+    if (toast) showToast(`🔔 알림을 켰어요 (등록된 기기 ${r.devices || 1}대)`);
+    return true;
+  } catch (e) { if (toast) showToast('❌ 알림 켜기 실패: ' + (e?.message || e)); return false; }
 }
 
 async function sendTestPush() {
@@ -2463,6 +2479,17 @@ function renderAll() {
 function todayLocal() {
   const n = new Date();
   return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
+}
+
+// 거래 입력 폼의 날짜 옆에 요일(월~일)을 표시한다.
+const DOW_KO = ['일','월','화','수','목','금','토'];
+function updateTxDow() {
+  const el = document.getElementById('tx-date-dow');
+  if (!el) return;
+  const v = document.getElementById('tx-date')?.value;
+  if (!v) { el.textContent = ''; return; }
+  const d = new Date(v + 'T00:00:00');
+  el.textContent = isNaN(d.getTime()) ? '' : `(${DOW_KO[d.getDay()]})`;
 }
 
 function monthStrOffset(delta) {
@@ -3034,6 +3061,7 @@ function openAddModal(tx = null, clone = false) {
     document.getElementById('tx-memo').value = '';
     selectedCategory = '';
   }
+  updateTxDow();   // 날짜 옆 요일 표시 갱신
   // 카드사·할부 초기화. 수정 모드에선 기존 할부를 새로 만들 수 없으니 할부 선택칸은 숨기고 카드사만 보인다.
   const isEdit = !!(tx && !clone);
   document.getElementById('tx-card').value = (tx ? (tx.card || '') : '');
@@ -4009,7 +4037,7 @@ function parseSmsText(text) {
 
   if (result.amount > 0) setMoneyInput('tx-amount', result.amount);
   if (result.name) document.getElementById('tx-name').value = result.name;
-  if (result.date) document.getElementById('tx-date').value = result.date;
+  if (result.date) { document.getElementById('tx-date').value = result.date; updateTxDow(); }
   if (result.category) {
     const valid = [...CATEGORIES.expense, ...CATEGORIES.income].map(c => c.key);
     if (valid.includes(result.category)) selectedCategory = result.category;
