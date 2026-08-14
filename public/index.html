@@ -1127,13 +1127,9 @@ body {
     <div class="form-group" id="card-installment-group">
       <label class="form-label">카드 / 할부 <span style="color:var(--text3);font-weight:400">(선택)</span></label>
       <div style="display:flex;gap:8px">
-        <select class="form-select" id="tx-card" style="flex:1">
-          <option value="">카드/현금 선택 안 함</option>
-          <option value="현금">💵 현금</option>
-          <option>신한</option><option>삼성</option><option>현대</option><option>국민</option>
-          <option>롯데</option><option>하나</option><option>우리</option><option>BC</option>
-          <option>농협</option><option>카카오뱅크</option><option>기타</option>
-        </select>
+        <!-- 목록은 [설정 › 카드값]에 등록된 카드로 자동 생성한다(renderCardOptions).
+             하드코딩하면 설정에 없는 카드가 뜨고, 그 카드는 결제월 계산이 안 돼 숫자가 틀어진다. -->
+        <select class="form-select" id="tx-card" style="flex:1"></select>
         <select class="form-select" id="tx-installment" style="flex:1" onchange="updateInstallmentHint()">
           <option value="1">일시불</option>
           <option value="2">2개월</option><option value="3">3개월</option><option value="4">4개월</option>
@@ -1944,6 +1940,7 @@ async function loadData() {
   await applyRecurring();
   await loadCategories();   // 사용자 카테고리(내장+커스텀 병합). 실패해도 내장으로 동작.
   await loadCardSettings(); // 카드 결제일·이용기간 (없으면 기본값)
+  renderCardOptions();      // 카드 선택칸을 설정 기준으로 채운다
   setCatBasis(catBasis);    // 저장해둔 기준으로 토글 표시를 맞춘다
   refreshPushStatus();      // 알림 켜짐/꺼짐 표시
   stashTokenForSW();        // 토큰이 새로 발급됐을 수 있으니 SW용 사본도 갱신
@@ -2180,6 +2177,8 @@ async function sendTestPush() {
 //   이용기간 = (M-1)월 S일 ~ M월 (S-1)일,  결제 = M월 P일
 //   예) 국민(S=12, P=25): 8/12~9/11 사용분 → 9/25 결제
 //       하나(S=8,  P=20): 8/8 ~9/7  사용분 → 9/20 결제
+// immediate:true = 선불·체크처럼 '쓰는 즉시' 통장에서 빠지는 수단(동백전 등).
+// 후불 신용카드와 달리 이용기간·결제일이 없으므로, 결제월은 그냥 쓴 달이다.
 const DEFAULT_CARDS = [
   { name: '하나', startDay: 8,  payDay: 20, owner: '아내' },
   { name: 'BC',   startDay: 11, payDay: 23, owner: '두두·아내' },
@@ -2188,7 +2187,34 @@ const DEFAULT_CARDS = [
   { name: '우리', startDay: 12, payDay: 25, owner: '아내' },
   { name: '삼성', startDay: 13, payDay: 25, owner: '두두·아내' },
   { name: '현대', startDay: 14, payDay: 25, owner: '두두·아내' },
+  { name: '동백전', immediate: true, startDay: 1, payDay: 1, owner: '' },
 ];
+// 후불 카드인가(= 다음 달에 몰아서 빠지는가). 등록 안 된 이름이나 선불은 '즉시'로 본다.
+function isDeferredCard(name) {
+  if (!name || name === '현금') return false;
+  const c = cardSettings.find(x => x.name === name);
+  return !!(c && !c.immediate);
+}
+
+// 거래추가의 카드 선택칸을 [설정 › 카드값]에 등록된 카드로 채운다.
+// 설정에서 카드를 추가하면 여기에도 바로 나타난다(예전엔 하드코딩이라 따로 놀았다).
+// 이미 쓴 적 있는 이름은 설정에 없어도 남긴다 — 옛 거래를 수정할 때 고를 수 있어야 하므로.
+function renderCardOptions() {
+  const el = document.getElementById('tx-card');
+  if (!el) return;
+  const keep = el.value;
+  const names = cardSettings.map(c => c.name);
+  transactions.forEach(t => {
+    if (t.card && t.card !== '현금' && !names.includes(t.card)) names.push(t.card);
+  });
+  el.innerHTML = `<option value="">카드/현금 선택 안 함</option><option value="현금">💵 현금</option>` +
+    names.map(n => {
+      const c = cardSettings.find(x => x.name === n);
+      const tag = c ? (c.immediate ? ' (선불·즉시)' : ` (${c.payDay}일 결제)`) : ' (설정 없음)';
+      return `<option value="${esc(n)}">💳 ${esc(n)}${tag}</option>`;
+    }).join('');
+  if (keep) el.value = keep;
+}
 let cardSettings = [];
 // 홈 카테고리 막대의 기준: 'spent'(이 달에 쓴 돈) | 'out'(이 달에 통장에서 빠지는 돈)
 let catBasis = localStorage.getItem('cat_basis') === 'out' ? 'out' : 'spent';
@@ -2251,6 +2277,7 @@ function cardBillFor(card, year, monthIdx) {
 // 이번 달(화면에서 보고 있는 달) 카드값 전체
 function cardBillsForMonth(year, monthIdx) {
   return cardSettings
+    .filter(c => !c.immediate)      // 선불(동백전)은 '나중에 빠지는 카드값'이 아니라 그때그때 나간 돈
     .map(c => cardBillFor(c, year, monthIdx))
     .sort((a, b) => a.payDate.localeCompare(b.payDate));
 }
@@ -2266,7 +2293,8 @@ function billingMonthOf(t) {
   const [y, m, d] = parts;
   if (!y || !m || !d) return String(t.date || '').slice(0, 7);
   const card = t.card ? cardSettings.find(c => c.name === t.card) : null;
-  if (!card) return `${y}-${String(m).padStart(2, '0')}`;
+  // 현금·이체는 물론, 동백전 같은 선불(immediate)도 쓰는 즉시 빠지므로 그 달이 곧 결제월이다.
+  if (!card || card.immediate) return `${y}-${String(m).padStart(2, '0')}`;
   const s = clampDay(y, m - 1, card.startDay);     // 그 달에 없는 날이면 말일로
   let by = y, bm = m;
   if (d >= s) { bm = m + 1; if (bm > 12) { bm = 1; by = y + 1; } }
@@ -2282,9 +2310,9 @@ function outflowTxFor(year, monthIdx) {
 // 이번 달 통장에서 '실제로 빠지는 돈' — 카드값 + 현금·이체
 function monthOutflow(year, monthIdx) {
   const items = outflowTxFor(year, monthIdx);
-  // '현금'은 카드가 아니라 현금·이체로 센다(카드값 집계에 섞이지 않게).
-  const cards = items.filter(t => t.card && t.card !== '현금').reduce((s, t) => s + t.amount, 0);
-  const nonCardItems = items.filter(t => !t.card || t.card === '현금');
+  // '카드값'은 후불 카드만. 현금·이체는 물론 동백전 같은 선불도 그때그때 빠진 돈이라 따로 센다.
+  const cards = items.filter(t => isDeferredCard(t.card)).reduce((s, t) => s + t.amount, 0);
+  const nonCardItems = items.filter(t => !isDeferredCard(t.card));
   const nonCard = nonCardItems.reduce((s, t) => s + t.amount, 0);
   return {
     cards, nonCard, total: cards + nonCard,
@@ -2340,14 +2368,22 @@ function renderCardSettingsList() {
                 style="width:30px;height:34px;flex-shrink:0;border:1px solid var(--expense);border-radius:6px;background:transparent;color:var(--expense);cursor:pointer;font-size:12px">🗑</button>
       </div>
       <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+        ${c.immediate ? `
+        <span style="font-size:11px;color:var(--income);flex:1">선불 — 쓰는 즉시 빠져요 (이용기간·결제일 없음)</span>` : `
         <label style="font-size:11px;color:var(--text3);flex-shrink:0">시작</label>
         <input class="form-input" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="31" value="${c.startDay}"
                style="margin:0;width:62px;padding:6px;font-size:13px" onchange="setCardField(${i},'startDay',this.value)">
         <label style="font-size:11px;color:var(--text3);flex-shrink:0">결제</label>
         <input class="form-input" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="31" value="${c.payDay}"
-               style="margin:0;width:62px;padding:6px;font-size:13px" onchange="setCardField(${i},'payDay',this.value)">
+               style="margin:0;width:62px;padding:6px;font-size:13px" onchange="setCardField(${i},'payDay',this.value)">`}
         <input class="form-input" value="${esc(c.owner || '')}" maxlength="40" placeholder="누구 카드"
                style="margin:0;flex:1;min-width:0;padding:6px;font-size:12px" onchange="setCardField(${i},'owner',this.value)">
+      </div>
+      <div style="margin-top:6px">
+        <button onclick="toggleCardImmediate(${i})"
+                style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);cursor:pointer;color:var(--text2)">
+          ${c.immediate ? '↩︎ 후불 카드로 바꾸기' : '⚡ 선불(동백전·체크)로 표시'}
+        </button>
       </div>
     </div>`).join('');
 }
@@ -2364,6 +2400,19 @@ async function setCardField(i, field, value) {
   }
   await saveCardSettings();
   renderCardBills();
+  renderCardOptions();   // 카드 이름·결제일이 바뀌면 선택칸도 따라간다
+  renderHomePage();
+}
+
+// 선불(동백전·체크카드처럼 쓰는 즉시 빠지는 것)로 표시할지 토글
+async function toggleCardImmediate(i) {
+  const c = cardSettings[i];
+  if (!c) return;
+  if (c.immediate) delete c.immediate; else c.immediate = true;
+  await saveCardSettings();
+  renderCardSettingsList();
+  renderCardBills();
+  renderCardOptions();
   renderHomePage();
 }
 

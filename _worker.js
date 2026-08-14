@@ -875,7 +875,10 @@ export default {
           if (!name) continue;
           if (!Number.isInteger(pay) || pay < 1 || pay > 31) continue;
           if (!Number.isInteger(start) || start < 1 || start > 31) continue;
-          out.push({ name, payDay: pay, startDay: start, owner: String(c?.owner ?? '').slice(0, 40) });
+          // immediate = 동백전·체크카드처럼 쓰는 즉시 빠지는 수단. 이용기간·결제일은 의미가 없다.
+          const row = { name, payDay: pay, startDay: start, owner: String(c?.owner ?? '').slice(0, 40) };
+          if (c?.immediate) row.immediate = true;
+          out.push(row);
         }
         await setSetting(env, 'card_settings', JSON.stringify(out));
         return json({ ok: true, cards: out });
