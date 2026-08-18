@@ -877,7 +877,19 @@ body {
     <div onclick="switchPage('settings')" style="font-size:14px;color:var(--accent);cursor:pointer;margin-bottom:8px">‹ 설정</div>
     <div style="margin-bottom:12px">
       <div style="font-size:18px;font-weight:700;color:var(--text);font-family:var(--font-display)">예산 관리</div>
-      <div style="font-size:12px;color:var(--text3);margin-top:2px">카테고리별 예산을 설정하고 초과 여부를 확인해요</div>
+      <div style="font-size:12px;color:var(--text3);margin-top:2px" id="budget-basis-note">카테고리별 예산을 설정하고 초과 여부를 확인해요</div>
+    </div>
+    <!-- 총예산: 카테고리를 하나하나 정하지 않아도 '이번 달 얼마까지'만 정하면 남은 돈이 보인다. -->
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-size:13px;font-weight:700;color:var(--text)">이번 달 총예산</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input class="form-input amount" id="total-budget-input" type="text" inputmode="numeric" pattern="[0-9]*"
+                 placeholder="0" oninput="fmtMoneyInput(this)" style="width:150px;padding:8px;font-size:16px;margin:0">
+          <button class="btn-secondary" onclick="saveTotalBudget()" style="margin:0;width:auto;padding:8px 12px;font-size:12px">저장</button>
+        </div>
+      </div>
+      <div id="total-budget-status" style="margin-top:10px"></div>
     </div>
     <div id="budget-list"></div>
     <button class="btn-secondary" onclick="openBudgetModal()" style="margin-top:4px">+ 예산 설정하기</button>
@@ -1362,7 +1374,12 @@ body {
 <div class="modal-backdrop" id="recurring-modal">
   <div class="modal">
     <div class="modal-handle"></div>
-    <div class="modal-title">정기 지출 추가</div>
+    <div class="modal-title">정기 지출·수입 추가</div>
+    <!-- 급여처럼 매달 들어오는 수입도 자동으로 넣을 수 있다(예전엔 지출만 됐다). -->
+    <div class="type-toggle">
+      <button class="type-btn active-expense" id="rec-btn-expense" onclick="setRecType('expense')">💸 지출</button>
+      <button class="type-btn" id="rec-btn-income" onclick="setRecType('income')">💵 수입</button>
+    </div>
     <div class="form-group">
       <label class="form-label">항목명</label>
       <input class="form-input" id="rec-name" placeholder="예: 넷플릭스, 관리비">
@@ -1453,7 +1470,7 @@ body {
       <input class="form-input" id="pass-current" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password">
     </div>
     <div class="form-group">
-      <label class="form-label">새 비밀번호 (숫자 4자리 이상)</label>
+      <label class="form-label">새 비밀번호 (숫자 6자리 이상)</label>
       <input class="form-input" id="pass-new" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="new-password">
     </div>
     <div class="form-group">
@@ -1763,7 +1780,7 @@ function setAuthMode(mode) {
     authMode === 'signup' ? '✨ 계정 만들기' : authMode === 'reset' ? '🔑 비밀번호 재설정' : '🔓 들어가기';
   const pw = document.getElementById('login-password');
   pw.setAttribute('autocomplete', authMode === 'login' ? 'current-password' : 'new-password');
-  pw.setAttribute('placeholder', authMode === 'reset' ? '새 비밀번호 (숫자 4자리 이상)' : authMode === 'signup' ? '쓸 비밀번호 (숫자 4자리 이상)' : '내 비밀번호(숫자)');
+  pw.setAttribute('placeholder', authMode === 'reset' ? '새 비밀번호 (숫자 6자리 이상)' : authMode === 'signup' ? '쓸 비밀번호 (숫자 6자리 이상)' : '내 비밀번호(숫자)');
   // '비밀번호를 잊으셨나요?' 링크는 로그인 모드에서만.
   const forgot = document.getElementById('forgot-link');
   if (forgot) forgot.style.display = (authMode === 'login') ? '' : 'none';
@@ -1816,7 +1833,7 @@ async function signup() {
   const pw = document.getElementById('login-password').value;
   const code = document.getElementById('signup-code').value;
   if (!name) { showToast('이름을 입력해 주세요'); return; }
-  if (!/^\d{4,}$/.test(pw)) { showToast('비밀번호는 숫자로만, 4자리 이상으로 정해 주세요'); return; }
+  if (!/^\d{6,}$/.test(pw)) { showToast('비밀번호는 숫자로만, 6자리 이상으로 정해 주세요'); return; }
   if (!code) { showToast('가입 코드를 입력해 주세요'); return; }
   const btn = document.getElementById('login-btn');
   btn.disabled = true; btn.textContent = '만드는 중…';
@@ -1836,7 +1853,7 @@ async function resetPassword() {
   const pw = document.getElementById('login-password').value;
   const code = document.getElementById('signup-code').value;
   if (!name) { showToast('이름을 입력해 주세요'); return; }
-  if (!/^\d{4,}$/.test(pw)) { showToast('새 비밀번호는 숫자로만, 4자리 이상으로 정해 주세요'); return; }
+  if (!/^\d{6,}$/.test(pw)) { showToast('새 비밀번호는 숫자로만, 6자리 이상으로 정해 주세요'); return; }
   if (!code) { showToast('가입 코드를 입력해 주세요'); return; }
   const btn = document.getElementById('login-btn');
   btn.disabled = true; btn.textContent = '변경 중…';
@@ -1999,6 +2016,7 @@ async function loadData() {
       // 안 그러면 늦게 도착한 이전 달 데이터가 현재 달 화면을 덮어쓴다.
       if (seq !== loadSeq) return;
       transactions = r.transactions || [];
+      lastBackupDate = r.last_backup || null;
       budgets = r.budgets || [];
     } catch(e) {
       if (seq === loadSeq) showToast('❌ 불러오기 실패: ' + e.message);
@@ -2012,6 +2030,7 @@ async function loadData() {
   await applyRecurring();
   await loadCategories();   // 사용자 카테고리(내장+커스텀 병합). 실패해도 내장으로 동작.
   await loadCardSettings(); // 카드 결제일·이용기간 (없으면 기본값)
+  await loadTotalBudget();  // 총예산
   renderCardOptions();      // 카드 선택칸을 설정 기준으로 채운다
   setCatBasis(catBasis);    // 저장해둔 기준으로 토글 표시를 맞춘다
   refreshPushStatus();      // 알림 켜짐/꺼짐 표시
@@ -2127,6 +2146,74 @@ function refreshFilledMarks() {
 document.addEventListener('change', e => {
   if (e.target && e.target.classList && e.target.classList.contains('form-select')) markSelectFilled(e.target);
 });
+
+// ===== 총예산 / 백업 안내 =====
+let totalBudget = 0;      // 이번 달 총예산(0이면 미설정)
+let lastBackupDate = null; // 마지막 백업일 (YYYY-MM-DD)
+
+async function loadTotalBudget() {
+  try {
+    if (demoMode) totalBudget = Number(localStorage.getItem('total_budget_demo')) || 0;
+    else if (authToken) totalBudget = Number((await api('/settings/total-budget')).amount) || 0;
+  } catch (e) { /* 실패해도 앱은 정상 */ }
+  const el = document.getElementById('total-budget-input');
+  if (el) el.value = totalBudget ? Number(totalBudget).toLocaleString('ko-KR') : '';
+}
+
+async function saveTotalBudget() {
+  const amount = amountDigits('total-budget-input') || 0;
+  try {
+    if (demoMode) localStorage.setItem('total_budget_demo', String(amount));
+    else if (authToken) await api('/settings/total-budget', { method: 'POST', body: { amount } });
+    else { showToast('로그인이 필요해요'); return; }
+  } catch (e) { showToast('❌ 저장 실패: ' + e.message); return; }
+  totalBudget = amount;
+  renderBudgetPage();
+  renderHomePage();
+  showToast(amount ? `✅ 이번 달 총예산 ${fmtMoney(amount)}` : '총예산을 껐어요');
+}
+
+// 이번 달 총예산 대비 상태. 기준(쓴/나갈)은 화면 토글을 따른다.
+function totalBudgetState() {
+  if (!totalBudget) return null;
+  const items = (catBasis === 'out')
+    ? outflowTxFor(currentYear, currentMonth)
+    : getMonthTx().filter(t => t.type === 'expense');
+  const spent = items.reduce((s, t) => s + t.amount, 0);
+  const left = totalBudget - spent;
+  const pct = Math.round((spent / totalBudget) * 100);
+  return { spent, left, pct };
+}
+
+function renderTotalBudgetStatus() {
+  const box = document.getElementById('total-budget-status');
+  if (!box) return;
+  const st = totalBudgetState();
+  if (!st) { box.innerHTML = '<div style="font-size:12px;color:var(--text3)">총예산을 정하면 남은 돈이 여기 보여요</div>'; return; }
+  const color = st.left < 0 ? 'var(--expense)' : st.pct > 80 ? '#f0a03c' : 'var(--income)';
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:6px">
+      <span>${fmtMoney(st.spent)} 씀</span>
+      <span style="color:${color};font-weight:700">${st.left < 0 ? `${fmtMoney(-st.left)} 초과` : `${fmtMoney(st.left)} 남음`}</span>
+    </div>
+    <div style="height:8px;background:var(--bg3);border-radius:99px;overflow:hidden">
+      <div style="height:100%;width:${Math.min(100, st.pct)}%;background:${color}"></div>
+    </div>`;
+}
+
+// 백업한 지 오래됐으면 알려준다. 사진까지 지키는 유일한 경로라 잊으면 곤란하다.
+function backupWarningLine() {
+  if (demoMode || !authToken) return '';
+  const today = todayLocal();
+  if (!lastBackupDate) {
+    return `<div style="font-size:12px;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border);cursor:pointer" onclick="switchPage('settings')">
+      💾 아직 백업한 적이 없어요 <span style="color:var(--text3)">· 설정에서 [백업 내려받기] ›</span></div>`;
+  }
+  const days = Math.floor((new Date(today) - new Date(lastBackupDate)) / 86400000);
+  if (days < 30) return '';
+  return `<div style="font-size:12px;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border);cursor:pointer" onclick="switchPage('settings')">
+    💾 백업한 지 <b>${days}일</b> 됐어요 <span style="color:var(--text3)">· 설정에서 [백업 내려받기] ›</span></div>`;
+}
 
 // ===== 새 버전 감지 =====
 // 상단 🔄는 '데이터'만 다시 받아온다. 앱 코드(화면·기능)는 그대로라, 새 버전을 배포해도
@@ -3060,7 +3147,16 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
     lines.push(`<div style="font-size:12px;color:var(--text2);margin-top:4px">
       🔒 고정 <b>${fmtMoney(fixed)}</b> <span style="color:var(--text3)">· 🛒 변동 <b>${fmtMoney(variable)}</b></span></div>`);
   }
-  slot.innerHTML = lines.join('');
+  // 총예산이 있으면 '이번 달 얼마 남았는지'를 맨 위에 — 매일 보고 싶은 숫자다.
+  const tb = totalBudgetState();
+  if (tb) {
+    const color = tb.left < 0 ? 'var(--expense)' : tb.pct > 80 ? '#f0a03c' : 'var(--income)';
+    lines.unshift(`<div style="font-size:12px;color:var(--text2);margin-top:2px">
+      🎯 총예산 ${fmtMoney(totalBudget)} 중
+      <b style="color:${color}">${tb.left < 0 ? `${fmtMoney(-tb.left)} 초과` : `${fmtMoney(tb.left)} 남음`}</b>
+      <span style="color:var(--text3)">· ${tb.pct}% 사용</span></div>`);
+  }
+  slot.innerHTML = lines.join('') + backupWarningLine();
 
   // ③ 전월 대비 가장 많이 변한 카테고리 한 줄 (증가·감소 통틀어, 1만원 미만은 잔소리라 숨김)
   const changeEl = document.getElementById('home-change');
@@ -3239,10 +3335,20 @@ function renderStatsPage() {
 }
 
 function renderBudgetPage() {
-  const tx = getMonthTx().filter(t=>t.type==='expense');
+  // 홈 막대와 같은 기준을 써야 한다. 예전엔 홈은 [쓴/나갈 기준] 토글을 따르고 여기는 늘 달력이라,
+  // 같은 항목이 홈에선 120%, 예산 화면에선 90%로 보였다(어느 쪽이 맞는지 알 수 없었다).
+  const tx = (catBasis === 'out')
+    ? outflowTxFor(currentYear, currentMonth)
+    : getMonthTx().filter(t=>t.type==='expense');
   const monthStr = getMonthStr();
   const catTotals = {};
   tx.forEach(t => { catTotals[t.category]=(catTotals[t.category]||0)+t.amount; });
+
+  renderTotalBudgetStatus();
+  const bn = document.getElementById('budget-basis-note');
+  if (bn) bn.textContent = (catBasis === 'out')
+    ? '이 달에 통장에서 빠지는 돈 기준 (홈의 [나갈 기준]과 같아요)'
+    : '이 달에 결제한 돈 기준 (홈의 [쓴 기준]과 같아요)';
 
   let html = '';
   if (!budgets.length) {
@@ -3304,7 +3410,7 @@ function renderRecurringList() {
         <div class="settings-item-icon">${catInfo(r.category).emoji}</div>
         <div>
           <div class="settings-item-text">${esc(r.name)}</div>
-          <div class="settings-item-sub">매월 ${r.day}일 · ${r.variable ? `금액 변동 (지난번 ${fmtMoney(r.amount)})` : fmtMoney(r.amount)}</div>
+          <div class="settings-item-sub">${r.type === 'income' ? '💵 수입 · ' : ''}매월 ${r.day}일 · ${r.variable ? `금액 변동 (지난번 ${fmtMoney(r.amount)})` : fmtMoney(r.amount)}</div>
         </div>
       </div>
       <div onclick="deleteRecurring(${i})" style="color:var(--expense);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px">×</div>
@@ -3315,21 +3421,6 @@ function renderRecurringList() {
 // ===== THEME =====
 function renderThemeGrids() {
   const current = document.body.getAttribute('data-theme');
-  const optHtml = THEMES.map(t => `
-    <div style="margin-bottom:12px;padding:14px;border-radius:var(--radius-sm);border:2px solid ${t.key===current?'var(--accent)':'var(--border)'};background:var(--surface);cursor:pointer;transition:all 0.2s"
-         onclick="setTheme('${t.key}')">
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,${t.colors[0]},${t.colors[1]});border:2px solid ${t.key===current?'var(--accent)':'var(--border)'}"></div>
-        <div>
-          <div style="font-size:14px;font-weight:600;color:var(--text)">${t.name} ${t.key===current?'✓':''}</div>
-          <div style="font-size:11px;color:var(--text3)">${t.desc}</div>
-        </div>
-      </div>
-    </div>
-  `).join('');
-  const el = document.getElementById('theme-options');
-  if (el) el.innerHTML = optHtml;
-
   const sg = document.getElementById('theme-grid-settings');
   if (sg) sg.innerHTML = THEMES.map(t => `
     <div class="theme-dot ${t.key===current?'active':''}" 
@@ -3602,6 +3693,20 @@ async function saveTransactionInner() {
   // 매번 이름을 치지 않아도 되게 — 하루에 가장 많이 반복하는 입력의 타이핑 한 번을 없앤다.
   const name = document.getElementById('tx-name').value.trim() || selectedCategory;
   const card = document.getElementById('tx-card').value || null;
+
+  // 같은 날·같은 금액·같은 카테고리가 이미 있으면 되묻는다.
+  // 문자 자동인식으로 한 번, 손으로 또 한 번 넣어 같은 결제가 두 번 잡히는 일이 흔하다.
+  // (수정 중일 때는 자기 자신과 비교하게 되므로 검사하지 않는다)
+  if (!currentEditTx) {
+    const dup = transactions.find(t =>
+      t.date === date && t.amount === amount && t.category === selectedCategory && t.type === currentTxType
+    );
+    if (dup && !confirm(`같은 내용이 이미 있어요.
+
+${dup.date} · ${dup.name} · ${fmtMoney(dup.amount)}
+
+그래도 하나 더 저장할까요?`)) return;
+  }
   const months = parseInt(document.getElementById('tx-installment').value, 10) || 1;
 
   // ── 무이자 할부: 새 지출 등록 때만(수정 아님). '금액'을 총액으로 보고 N개월치를 만든다. ──
@@ -3686,7 +3791,11 @@ function checkBudgetAlert(tx) {
   const monthStr = getMonthStr();
   const bud = budgets.find(b=>b.month===monthStr && b.category===tx.category);
   if (!bud) return;
-  const spent = getMonthTx().filter(t=>t.type==='expense'&&t.category===tx.category).reduce((s,t)=>s+t.amount,0);
+  // 경고도 화면과 같은 기준으로 세야 한다(기준이 다르면 화면엔 초과인데 경고가 안 뜬다).
+  const basisItems = (catBasis === 'out')
+    ? outflowTxFor(currentYear, currentMonth)
+    : getMonthTx().filter(t=>t.type==='expense');
+  const spent = basisItems.filter(t=>t.category===tx.category).reduce((s,t)=>s+t.amount,0);
   const pct = Math.round((spent/bud.amount)*100);
   // '✅ 저장 완료' 토스트를 곧바로 덮어써서 저장됐는지조차 못 보게 되던 문제 —
   // 같은 토스트 자리를 쓰므로 저장 안내가 보일 시간을 준 뒤에 띄운다.
@@ -4047,8 +4156,21 @@ async function saveBudget() {
 // ===== RECURRING =====
 // 규칙은 서버(D1)에 둔다. 예전엔 각자 폰의 localStorage에만 있어서 한쪽이 지워도
 // 다른 쪽 폰이 계속 등록해댔고, 원인이 배우자 폰이라는 걸 화면만 봐선 알 수 없었다.
+let recType = 'expense';
+function setRecType(t) {
+  recType = (t === 'income') ? 'income' : 'expense';
+  document.getElementById('rec-btn-expense').className = 'type-btn' + (recType === 'expense' ? ' active-expense' : '');
+  document.getElementById('rec-btn-income').className = 'type-btn' + (recType === 'income' ? ' active-income' : '');
+  // 카테고리 목록도 유형에 맞춰 바꾼다(수입 규칙에 '식비'가 뜨면 안 된다).
+  const rs = document.getElementById('rec-cat');
+  if (rs) rs.innerHTML = (CATEGORIES[recType] || CATEGORIES.expense)
+    .map(c => `<option value="${esc(c.key)}">${esc(c.emoji)} ${esc(c.label || c.key)}</option>`).join('');
+  // 수입은 '금액이 매달 다름'이 의미가 없진 않지만 흔치 않아 숨기지 않고 그대로 둔다.
+}
+
 function openRecurringModal() {
   renderCategoryGrids();
+  setRecType('expense');
   const v = document.getElementById('rec-variable');
   if (v) v.checked = false;
   onRecVariableToggle();
@@ -4088,11 +4210,11 @@ async function saveRecurring() {
 
   const variable = !!document.getElementById('rec-variable')?.checked;
   if (demoMode) {
-    recurringItems.push({ id: 'local_' + Date.now(), name, amount, category, day, variable: variable ? 1 : 0 });
+    recurringItems.push({ id: 'local_' + Date.now(), name, amount, category, day, variable: variable ? 1 : 0, type: recType });
     localStorage.setItem('recurring', JSON.stringify(recurringItems));
   } else if (authToken) {
     try {
-      const r = await api('/recurring', { method: 'POST', body: { name, amount, category, day, variable } });
+      const r = await api('/recurring', { method: 'POST', body: { name, amount, category, day, variable, type: recType } });
       recurringItems = r.rules || [];
     } catch(e) { showToast('❌ 저장 실패: ' + e.message); return; }
   } else { showToast('❌ 로그인이 필요해요'); return; }
@@ -4241,6 +4363,8 @@ async function exportBackup() {
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
   showToast(`💾 백업 완료 (거래 ${(data.transactions || []).length}건)`);
+  // 언제 백업했는지 남겨야 "백업한 지 N일 됐어요"를 알려줄 수 있다.
+  try { if (!demoMode && authToken) { await api('/settings/backup-mark', { method: 'POST' }); lastBackupDate = todayLocal(); } } catch (e) {}
 }
 
 function triggerImportBackup() { document.getElementById('backup-file-input').click(); }
@@ -4333,7 +4457,7 @@ async function changePassword() {
   const nw = document.getElementById('pass-new').value;
   const nw2 = document.getElementById('pass-new2').value;
   if (!cur) { showToast('현재 비밀번호를 입력해 주세요'); return; }
-  if (!/^\d{4,}$/.test(nw)) { showToast('새 비밀번호는 숫자로만, 4자리 이상으로 정해 주세요'); return; }
+  if (!/^\d{6,}$/.test(nw)) { showToast('새 비밀번호는 숫자로만, 6자리 이상으로 정해 주세요'); return; }
   if (nw !== nw2) { showToast('새 비밀번호가 서로 달라요'); return; }
   const btn = document.getElementById('pass-save-btn');
   btn.disabled = true; btn.textContent = '변경 중…';

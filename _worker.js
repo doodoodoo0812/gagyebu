@@ -642,7 +642,7 @@ export default {
         const name = String(b?.name ?? '').trim().slice(0, 40);
         const password = String(b?.password ?? '');
         if (name.length < 1) return json({ error: '이름을 입력해 주세요' }, 400);
-        if (!/^\d{4,}$/.test(password)) return json({ error: '비밀번호는 숫자로만, 4자리 이상으로 정해 주세요' }, 400);
+        if (!/^\d{6,}$/.test(password)) return json({ error: '비밀번호는 숫자로만, 6자리 이상으로 정해 주세요' }, 400);
         const dup = await env.DB.prepare(`SELECT id FROM users WHERE name = ?1`).bind(name).first();
         if (dup) return json({ error: '이미 있는 이름이에요. 로그인해 주세요' }, 409);
         const { salt, hash } = await hashPassword(password);
@@ -690,7 +690,7 @@ export default {
         if (!safeEqual(b?.code ?? '', env.APP_PASSWORD)) return json({ error: '가입 코드가 맞지 않아요' }, 401);
         const name = String(b?.name ?? '').trim().slice(0, 40);
         const password = String(b?.password ?? '');
-        if (!/^\d{4,}$/.test(password)) return json({ error: '새 비밀번호는 숫자로만, 4자리 이상으로 정해 주세요' }, 400);
+        if (!/^\d{6,}$/.test(password)) return json({ error: '새 비밀번호는 숫자로만, 6자리 이상으로 정해 주세요' }, 400);
         const u = name ? await env.DB.prepare(`SELECT id, name FROM users WHERE name = ?1`).bind(name).first() : null;
         // 여기선 코드로 이미 본인임을 증명했으므로 '없는 이름'을 알려줘도 된다(도움이 됨).
         if (!u) return json({ error: '그 이름의 계정이 없어요. 이름을 확인해 주세요' }, 404);
@@ -724,7 +724,7 @@ export default {
         }
         const current = String(b?.current ?? '');
         const next = String(b?.next ?? '');
-        if (!/^\d{4,}$/.test(next)) return json({ error: '새 비밀번호는 숫자로만, 4자리 이상으로 정해 주세요' }, 400);
+        if (!/^\d{6,}$/.test(next)) return json({ error: '새 비밀번호는 숫자로만, 6자리 이상으로 정해 주세요' }, 400);
         const u = await env.DB.prepare(`SELECT salt, hash FROM users WHERE id = ?1`).bind(session.u).first();
         if (!u) return json({ error: '계정을 찾을 수 없어요. 다시 로그인해 주세요' }, 404);
         const cur = await hashPassword(current, u.salt);
@@ -758,7 +758,8 @@ export default {
           `SELECT id, month, category, amount FROM budgets WHERE month = ?1`
         ).bind(month).all();
 
-        return json({ transactions: tx.results ?? [], budgets: bud.results ?? [] });
+        const lastBackup = await getSetting(env, 'last_backup');
+        return json({ transactions: tx.results ?? [], budgets: bud.results ?? [], last_backup: lastBackup || null });
       }
 
       // ── 전체 거래 (엑셀 '전체 내보내기' 전용) ──
@@ -956,6 +957,28 @@ export default {
         ).first();
         return json({ latest: row ? { ...row, kind: 'add' } : null });
       }
+      // ── 총예산 (이번 달 얼마까지) ──
+      //  카테고리별 예산은 따로 있고, 이건 '전체 한도' 하나다. 부부가 같은 값을 봐야 하므로 서버에 둔다.
+      if (path === '/api/settings/total-budget' && request.method === 'GET') {
+        const raw = await getSetting(env, 'total_budget');
+        return json({ amount: raw ? (Number(safeParse(raw)?.amount) || 0) : 0 });
+      }
+      if (path === '/api/settings/total-budget' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const amount = Number(b?.amount);
+        if (!Number.isInteger(amount) || amount < 0 || amount >= 100000000000) {
+          return json({ error: '금액을 확인해 주세요' }, 400);
+        }
+        await setSetting(env, 'total_budget', JSON.stringify({ amount }));
+        return json({ ok: true, amount });
+      }
+
+      // ── 마지막 백업 시각 (백업한 지 오래됐는지 알려주려고 기록한다) ──
+      if (path === '/api/settings/backup-mark' && request.method === 'POST') {
+        await setSetting(env, 'last_backup', new Date().toISOString().slice(0, 10));
+        return json({ ok: true });
+      }
+
       // ── 매일 기록 알림 설정 ──
       //  서버에 둔다: 예전엔 각자 폰의 localStorage라 부부가 서로 다른 설정을 봤고,
       //  무엇보다 앱이 꺼져 있으면 알림 자체가 안 떴다(이제 서버 cron이 보낸다).
@@ -1204,7 +1227,7 @@ export default {
 
       // ── 정기 지출 규칙 ──
       if (path === '/api/recurring' && request.method === 'GET') {
-        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules ORDER BY day`).all();
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable, type FROM recurring_rules ORDER BY day`).all();
         return json({ rules: r.results ?? [] });
       }
 
@@ -1218,10 +1241,12 @@ export default {
         const id = crypto.randomUUID();
         // variable=1 이면 '날짜는 같지만 금액이 매달 다른' 규칙(관리비 등) — 자동등록 대신 알림만 간다.
         const variable = b?.variable ? 1 : 0;
+        // 급여처럼 매달 들어오는 수입도 같은 방식으로 자동등록한다.
+        const rtype = (b?.type === 'income') ? 'income' : 'expense';
         await env.DB.prepare(
-          `INSERT INTO recurring_rules (id, name, amount, category, day, variable) VALUES (?1,?2,?3,?4,?5,?6)`
-        ).bind(id, String(b.name), amount, String(b.category), day, variable).run();
-        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules ORDER BY day`).all();
+          `INSERT INTO recurring_rules (id, name, amount, category, day, variable, type) VALUES (?1,?2,?3,?4,?5,?6,?7)`
+        ).bind(id, String(b.name), amount, String(b.category), day, variable, rtype).run();
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable, type FROM recurring_rules ORDER BY day`).all();
         return json({ rules: r.results ?? [] });
       }
 
@@ -1230,7 +1255,7 @@ export default {
         await env.DB.prepare(`DELETE FROM recurring_applied WHERE rule_id = ?1`).bind(id).run();
         const d = await env.DB.prepare(`DELETE FROM recurring_rules WHERE id = ?1`).bind(id).run();
         if (!d.meta.changes) return json({ error: '정기 지출을 찾지 못했어요' }, 404);
-        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules ORDER BY day`).all();
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable, type FROM recurring_rules ORDER BY day`).all();
         return json({ rules: r.results ?? [] });
       }
 
@@ -1249,7 +1274,7 @@ export default {
         const todayDay = Number(today.slice(8, 10));
         const lastDay = new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).getUTCDate();
 
-        const rules = (await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules`).all()).results ?? [];
+        const rules = (await env.DB.prepare(`SELECT id, name, amount, category, day, variable, type FROM recurring_rules`).all()).results ?? [];
         const created = [];
         for (const rule of rules) {
           // 금액이 매달 다른 규칙은 자동으로 넣을 수 없다(얼마인지 모른다). 그날 알림만 보내고
@@ -1273,9 +1298,10 @@ export default {
                     .bind(rule.id, ym, txId),
               env.DB.prepare(
                 `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name)
-                 SELECT ?1,?2,'expense',?3,?4,?5,'자동 등록',NULL,1,''
+                 SELECT ?1,?2,?8,?3,?4,?5,'자동 등록',NULL,1,''
                  WHERE (SELECT tx_id FROM recurring_applied WHERE rule_id=?6 AND ym=?7) = ?1`
-              ).bind(txId, dateStr, rule.category, rule.name, rule.amount, rule.id, ym),
+              ).bind(txId, dateStr, rule.category, rule.name, rule.amount, rule.id, ym,
+                     rule.type === 'income' ? 'income' : 'expense'),
             ]);
           } catch (e) {
             console.warn('정기 지출 자동 등록 실패:', rule.name, String(e?.message || e));
@@ -1359,13 +1385,14 @@ export default {
            FROM transactions WHERE deleted_at IS NULL ORDER BY date`
         ).all();
         const bud = await env.DB.prepare(`SELECT id, month, category, amount FROM budgets`).all();
-        const rec = await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules`).all();
+        const rec = await env.DB.prepare(`SELECT id, name, amount, category, day, variable, type FROM recurring_rules`).all();
         const cat = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories`).all();
         const catOv = await getSetting(env, 'category_overrides');
         const cardSet = await getSetting(env, 'card_settings');
         // 알림 시각도 백업에 담는다. 복원했는데 9시 알림만 사라져 다시 맞춰야 하면 백업이라고 하기 어렵다.
         // (푸시 구독은 기기마다 다른 값이라 담지 않는다 — 다른 기기에 복원해도 의미가 없다)
         const reminderSet = await getSetting(env, 'reminder');
+        const totalBudget = await getSetting(env, 'total_budget');
         return json({
           version: 1,
           exported_at: new Date().toISOString(),
@@ -1376,6 +1403,7 @@ export default {
           category_overrides: catOv ? safeParse(catOv) : null,
           card_settings: cardSet ? safeParse(cardSet) : null,
           reminder: reminderSet ? safeParse(reminderSet) : null,
+          total_budget: totalBudget ? safeParse(totalBudget) : null,
         });
       }
 
@@ -1431,6 +1459,9 @@ export default {
           } catch (e) {}
         }
         // 카테고리 편집(숨김/이름/순서). 백업에 있으면 되살린다 — 안 그러면 복원 한 번에 편집이 날아간다.
+        if (b?.total_budget && typeof b.total_budget === 'object') {
+          try { await setSetting(env, 'total_budget', JSON.stringify(b.total_budget)); } catch (e) {}
+        }
         if (b?.reminder && typeof b.reminder === 'object') {
           try { await setSetting(env, 'reminder', JSON.stringify(b.reminder)); } catch (e) {}
         }

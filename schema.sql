@@ -69,6 +69,8 @@ CREATE TABLE recurring_rules (
   amount     INTEGER NOT NULL CHECK (amount > 0 AND amount < 100000000000),
   category   TEXT NOT NULL CHECK (length(category) BETWEEN 1 AND 40),
   day        INTEGER NOT NULL CHECK (day BETWEEN 1 AND 31),
+  -- 'income'이면 급여처럼 매달 들어오는 수입. 기본은 expense라 기존 규칙은 그대로 동작한다.
+  type       TEXT NOT NULL DEFAULT 'expense' CHECK (type IN ('income','expense')),
   -- 1이면 '날짜는 같지만 금액이 매달 다른' 정기지출(관리비 등).
   -- 자동으로 넣을 수 없으므로 그날 알림만 보내고, 사용자가 금액을 넣을 때 등록한다.
   -- 이때 amount는 참고용(지난번 금액)으로만 쓴다.
