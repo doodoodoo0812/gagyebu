@@ -1062,6 +1062,22 @@ body {
       <div class="theme-grid" id="theme-grid-settings"></div>
     </div>
 
+    <!-- 새 버전 배너는 '새로 배포된 뒤'에만 뜬다. 그래서 사용자가 원할 때 직접 누를 수 있는
+         상시 버튼이 따로 필요하다(무언가 이상할 때 가장 먼저 해보게 되는 동작이기도 하다). -->
+    <div class="settings-section">
+      <div class="settings-title">앱</div>
+      <div class="settings-item" onclick="applyUpdate()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">⬇️</div>
+          <div>
+            <div class="settings-item-text">앱 새로고침 (최신 버전 받기)</div>
+            <div class="settings-item-sub" id="app-version-sub">화면이 이상하거나 새 기능이 안 보일 때</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
+    </div>
+
     <div style="text-align:center;padding:20px;color:var(--text3);font-size:12px">
       우리집 가계부 v1.0<br>Made with ❤️
     </div>
@@ -2105,6 +2121,12 @@ document.addEventListener('change', e => {
 // 홈 화면에 설치된 앱은 옛 코드로 계속 돌 수 있다. 그걸 알려주고 한 번에 갈아타게 한다.
 const MY_APP_VERSION = (document.querySelector('meta[name="app-version"]')?.content || '').trim();
 
+// 설정 화면에 '지금 최신인지'를 적어준다. 눌러야 할지 말지 알 수 있어야 한다.
+function showVersionSub(text) {
+  const el = document.getElementById('app-version-sub');
+  if (el) el.textContent = text;
+}
+
 async function checkAppVersion() {
   // 로컬(dev)이나 버전을 못 받은 경우엔 조용히 넘어간다.
   if (!MY_APP_VERSION || MY_APP_VERSION === '__APP_VERSION__' || MY_APP_VERSION === 'dev') return;
@@ -2114,6 +2136,9 @@ async function checkAppVersion() {
     const { version } = await res.json();
     if (version && version !== MY_APP_VERSION) {
       document.getElementById('update-banner').style.display = 'block';
+      showVersionSub('✨ 새 버전이 나왔어요 — 눌러서 받기');
+    } else {
+      showVersionSub('지금이 최신이에요 · 눌러도 안전해요');
     }
   } catch (e) { /* 네트워크가 없으면 그냥 넘어간다 */ }
 }
