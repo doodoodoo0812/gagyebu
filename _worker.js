@@ -1300,6 +1300,9 @@ export default {
         const cat = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories`).all();
         const catOv = await getSetting(env, 'category_overrides');
         const cardSet = await getSetting(env, 'card_settings');
+        // 알림 시각도 백업에 담는다. 복원했는데 9시 알림만 사라져 다시 맞춰야 하면 백업이라고 하기 어렵다.
+        // (푸시 구독은 기기마다 다른 값이라 담지 않는다 — 다른 기기에 복원해도 의미가 없다)
+        const reminderSet = await getSetting(env, 'reminder');
         return json({
           version: 1,
           exported_at: new Date().toISOString(),
@@ -1309,6 +1312,7 @@ export default {
           categories: cat.results ?? [],
           category_overrides: catOv ? safeParse(catOv) : null,
           card_settings: cardSet ? safeParse(cardSet) : null,
+          reminder: reminderSet ? safeParse(reminderSet) : null,
         });
       }
 
@@ -1364,6 +1368,9 @@ export default {
           } catch (e) {}
         }
         // 카테고리 편집(숨김/이름/순서). 백업에 있으면 되살린다 — 안 그러면 복원 한 번에 편집이 날아간다.
+        if (b?.reminder && typeof b.reminder === 'object') {
+          try { await setSetting(env, 'reminder', JSON.stringify(b.reminder)); } catch (e) {}
+        }
         if (Array.isArray(b?.card_settings)) {
           try { await setSetting(env, 'card_settings', JSON.stringify(b.card_settings)); } catch (e) {}
         }

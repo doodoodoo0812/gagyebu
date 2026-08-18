@@ -2,7 +2,7 @@
 //
 // 배포할 때마다 버전을 올린다. activate에서 옛 캐시를 지우는 유일한 방아쇠라,
 // 안 올리면 새 버전을 배포해도 사용자는 계속 옛 화면을 본다.
-const CACHE_NAME = 'gagyebu-v15';
+const CACHE_NAME = 'gagyebu-v16';
 const ASSETS = ['/', '/index.html', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,9 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+      // 푸시 토큰 캐시(TOKEN_CACHE)는 남긴다. 같이 지우면 서비스워커가 인증을 못 해
+      // 알림 문구를 못 받아오고, 갱신될 때마다 "새 거래가 등록됐어요"로만 떨어진다.
+      Promise.all(keys.filter(k => k !== CACHE_NAME && k !== 'gagyebu-push-auth').map(k => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
@@ -85,6 +87,9 @@ self.addEventListener('push', e => {
   e.waitUntil((async () => {
     let title = '우리집 가계부';
     let body = '새 거래가 등록됐어요';
+    // 거래 알림과 매일 기록 알림은 성격이 다르다. 같은 tag를 쓰면 서로 덮어써서
+    // 9시 알림이 왔다가 거래 하나 넣으면 사라진다. 종류별로 자리를 나눈다.
+    let tag = 'gagyebu-tx';
     try {
       const token = await readToken();
       if (token) {
@@ -93,6 +98,7 @@ self.addEventListener('push', e => {
           const d = await res.json();
           const t = d && d.latest;
           if (t && t.kind === 'reminder') {
+            tag = 'gagyebu-reminder';
             // 매일 기록 알림 — 금액·카테고리가 없으므로 문구만 보여준다.
             title = '💰 우리집 가계부';
             body = t.name || '가계부 기록할 시간이에요!';
@@ -110,7 +116,7 @@ self.addEventListener('push', e => {
       body,
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
-      tag: 'gagyebu-tx',        // 연달아 와도 알림이 쌓이지 않고 최신 것으로 바뀐다
+      tag,                      // 같은 종류끼리만 최신 것으로 바뀐다(거래 ↔ 기록알림은 따로 남는다)
       renotify: true,
       data: { url: '/' },
     });
