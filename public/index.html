@@ -3839,7 +3839,7 @@ async function cancelInstallment() {
       transactions = JSON.parse(localStorage.getItem('transactions_demo') || '[]');
     } else if (authToken) {
       await api('/installment/' + encodeURIComponent(t.installment_id), { method: 'DELETE' });
-      await loadData();
+      loadData();
     } else { showToast('❌ 로그인이 필요해요'); return; }
   } catch (e) { showToast('❌ 취소 실패: ' + e.message); return; }
   closeModal('detail-modal');
@@ -3889,7 +3889,7 @@ async function deleteCurrentTx() {
       showToast('❌ 삭제 실패: ' + e.message);
       return;
     }
-    await loadData();
+    loadData();   // 목록 갱신은 기다리지 않는다 — 삭제는 이미 끝났다
   } else {
     showToast('❌ 로그인이 필요해요');
     return;
@@ -3976,7 +3976,7 @@ async function restoreTrashTx(id) {
       }
     } else if (authToken) {
       await api('/tx/' + encodeURIComponent(id) + '/restore', { method: 'POST' });
-      await loadData();
+      loadData();
     }
   } catch(e) { showToast('❌ 복원 실패: ' + e.message); return; }
   showToast('↩️ 되살렸어요');
@@ -4100,7 +4100,7 @@ async function saveRecurring() {
   closeModal('recurring-modal');
   renderRecurringList();
   showToast('✅ 정기 지출 등록 완료');
-  await loadData();   // 오늘이 이미 그날을 지났으면 바로 등록되도록
+  loadData();   // 오늘이 이미 그날을 지났으면 바로 등록된다(기다리지는 않는다)
 }
 
 async function deleteRecurring(i) {
@@ -4998,7 +4998,7 @@ async function deleteMonthReceipts() {
       showToast('❌ 삭제 실패: ' + e.message);
       return;
     }
-    await loadData();
+    loadData();
   } else {
     showToast('❌ 로그인이 필요해요');
     return;
