@@ -68,7 +68,11 @@ CREATE TABLE recurring_rules (
   name       TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
   amount     INTEGER NOT NULL CHECK (amount > 0 AND amount < 100000000000),
   category   TEXT NOT NULL CHECK (length(category) BETWEEN 1 AND 40),
-  day        INTEGER NOT NULL CHECK (day BETWEEN 1 AND 31)
+  day        INTEGER NOT NULL CHECK (day BETWEEN 1 AND 31),
+  -- 1이면 '날짜는 같지만 금액이 매달 다른' 정기지출(관리비 등).
+  -- 자동으로 넣을 수 없으므로 그날 알림만 보내고, 사용자가 금액을 넣을 때 등록한다.
+  -- 이때 amount는 참고용(지난번 금액)으로만 쓴다.
+  variable   INTEGER NOT NULL DEFAULT 0 CHECK (variable IN (0,1))
 );
 
 -- "이 규칙을 이 달에 이미 등록했다"는 사실 자체를 남긴다. 거래가 아니라 '등록했음'을 기억하는 게 핵심.

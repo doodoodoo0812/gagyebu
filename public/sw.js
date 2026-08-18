@@ -2,7 +2,7 @@
 //
 // 배포할 때마다 버전을 올린다. activate에서 옛 캐시를 지우는 유일한 방아쇠라,
 // 안 올리면 새 버전을 배포해도 사용자는 계속 옛 화면을 본다.
-const CACHE_NAME = 'gagyebu-v16';
+const CACHE_NAME = 'gagyebu-v17';
 const ASSETS = ['/', '/index.html', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -97,7 +97,12 @@ self.addEventListener('push', e => {
         if (res.ok) {
           const d = await res.json();
           const t = d && d.latest;
-          if (t && t.kind === 'reminder') {
+          if (t && t.kind === 'need_amount') {
+            // 금액이 매달 다른 정기지출 — 그날 "얼마인지 넣어달라"고 알린다.
+            tag = 'gagyebu-need-amount';
+            title = `📝 ${t.name} 금액을 입력해 주세요`;
+            body = t.amount ? `지난번 ${won(t.amount)} · 눌러서 입력하기` : '눌러서 입력하기';
+          } else if (t && t.kind === 'reminder') {
             tag = 'gagyebu-reminder';
             // 매일 기록 알림 — 금액·카테고리가 없으므로 문구만 보여준다.
             title = '💰 우리집 가계부';

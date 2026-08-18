@@ -1172,7 +1172,7 @@ body {
       <textarea class="form-textarea" id="tx-memo" placeholder="메모를 입력하세요"></textarea>
     </div>
 
-    <button class="btn-primary" onclick="saveTransaction()">저장하기</button>
+    <button class="btn-primary" id="tx-save-btn" onclick="saveTransaction()">저장하기</button>
     <button class="btn-secondary" onclick="closeModal('add-modal')">취소</button>
   </div>
 </div>
@@ -1333,6 +1333,18 @@ body {
     <div class="form-group">
       <label class="form-label">매월 몇 일?</label>
       <input class="form-input" id="rec-day" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="31" placeholder="예: 5">
+    </div>
+    <!-- 관리비처럼 날짜는 같은데 금액이 매달 다른 것. 자동으로 넣으면 틀린 금액이 쌓이므로
+         그날 "금액을 입력하세요" 알림만 보내고, 직접 넣을 때 등록되게 한다. -->
+    <div class="form-group" style="background:var(--surface2);border-radius:10px;padding:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
+        <input type="checkbox" id="rec-variable" style="width:18px;height:18px" onchange="onRecVariableToggle()">
+        <span>매달 금액이 달라요 (관리비 등)</span>
+      </label>
+      <div style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.5">
+        켜면 자동으로 넣지 않고, 그날 <b>“금액을 입력하세요”</b> 알림만 보내요.
+        위 금액은 <b>참고용(지난번 금액)</b>으로 쓰여요.
+      </div>
     </div>
     <button class="btn-primary" onclick="saveRecurring()">저장</button>
     <button class="btn-secondary" onclick="closeModal('recurring-modal')">취소</button>
@@ -3219,7 +3231,7 @@ function renderRecurringList() {
         <div class="settings-item-icon">${catInfo(r.category).emoji}</div>
         <div>
           <div class="settings-item-text">${esc(r.name)}</div>
-          <div class="settings-item-sub">매월 ${r.day}일 · ${fmtMoney(r.amount)}</div>
+          <div class="settings-item-sub">매월 ${r.day}일 · ${r.variable ? `금액 변동 (지난번 ${fmtMoney(r.amount)})` : fmtMoney(r.amount)}</div>
         </div>
       </div>
       <div onclick="deleteRecurring(${i})" style="color:var(--expense);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px">×</div>
@@ -3490,7 +3502,23 @@ function addDemoInstallment(p) {
   transactions = stored;
 }
 
+// 저장이 끝나기 전에 또 누르면 같은 거래가 두세 번 들어간다(실제로 겪은 문제).
+// 눌린 즉시 잠그고, 끝나면 무슨 일이 있어도 푼다.
+let txSaving = false;
 async function saveTransaction() {
+  if (txSaving) return;
+  const saveBtn = document.getElementById('tx-save-btn');
+  txSaving = true;
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '저장 중…'; }
+  try {
+    await saveTransactionInner();
+  } finally {
+    txSaving = false;
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '저장하기'; }
+  }
+}
+
+async function saveTransactionInner() {
   const amount = amountDigits('tx-amount');
   const date = document.getElementById('tx-date').value;
   const memo = document.getElementById('tx-memo').value.trim();
@@ -3508,7 +3536,7 @@ async function saveTransaction() {
     const payload = { date, card, category: selectedCategory, name, amount, months, memo, user_name: localStorage.getItem('userName') || '' };
     try {
       if (demoMode) addDemoInstallment(payload);
-      else if (authToken) { await api('/installment', { method: 'POST', body: payload }); await loadData(); }
+      else if (authToken) { await api('/installment', { method: 'POST', body: payload }); loadData(); }   // 목록 갱신은 기다리지 않는다
       else { showToast('❌ 저장할 곳이 없어요. 로그인해 주세요'); return; }
     } catch (e) { showToast('❌ 할부 등록 실패: ' + e.message); return; }
     closeModal('add-modal');
@@ -3548,7 +3576,13 @@ async function saveTransaction() {
       showToast('❌ 저장 실패: ' + e.message);
       return;
     }
-    await loadData();
+    // 목록 새로고침(13개월치)을 기다렸다가 닫으면 몇 초씩 멈춰 보인다.
+    // 저장은 이미 끝났으니 먼저 닫고 알리고, 목록은 뒤에서 갱신한다.
+    closeModal('add-modal');
+    showToast(currentEditTx ? '✅ 수정 완료' : '✅ 저장 완료');
+    checkBudgetAlert(tx);
+    loadData();
+    return;
   } else {
     showToast('❌ 저장할 곳이 없어요. 로그인해 주세요');
     return;
@@ -3939,7 +3973,20 @@ async function saveBudget() {
 // ===== RECURRING =====
 // 규칙은 서버(D1)에 둔다. 예전엔 각자 폰의 localStorage에만 있어서 한쪽이 지워도
 // 다른 쪽 폰이 계속 등록해댔고, 원인이 배우자 폰이라는 걸 화면만 봐선 알 수 없었다.
-function openRecurringModal() { renderCategoryGrids(); openModal('recurring-modal'); }
+function openRecurringModal() {
+  renderCategoryGrids();
+  const v = document.getElementById('rec-variable');
+  if (v) v.checked = false;
+  onRecVariableToggle();
+  openModal('recurring-modal');
+}
+
+// '매달 금액이 달라요'를 켜면 금액칸 안내를 '지난번 금액(참고용)'으로 바꿔 오해를 없앤다.
+function onRecVariableToggle() {
+  const on = !!document.getElementById('rec-variable')?.checked;
+  const amt = document.getElementById('rec-amount');
+  if (amt) amt.placeholder = on ? '지난번 금액 (참고용)' : '0';
+}
 // 정기 지출 관리(목록+추가) — 설정에서 홈 바로가기로 옮겼다.
 function openRecurringManage() { renderRecurringList(); openModal('recurring-mgmt-modal'); }
 
@@ -3965,12 +4012,13 @@ async function saveRecurring() {
   if (!name || !amount || !day) { showToast('모두 입력해 주세요'); return; }
   if (day < 1 || day > 31) { showToast('날짜는 1~31 사이로 넣어주세요'); return; }
 
+  const variable = !!document.getElementById('rec-variable')?.checked;
   if (demoMode) {
-    recurringItems.push({ id: 'local_' + Date.now(), name, amount, category, day });
+    recurringItems.push({ id: 'local_' + Date.now(), name, amount, category, day, variable: variable ? 1 : 0 });
     localStorage.setItem('recurring', JSON.stringify(recurringItems));
   } else if (authToken) {
     try {
-      const r = await api('/recurring', { method: 'POST', body: { name, amount, category, day } });
+      const r = await api('/recurring', { method: 'POST', body: { name, amount, category, day, variable } });
       recurringItems = r.rules || [];
     } catch(e) { showToast('❌ 저장 실패: ' + e.message); return; }
   } else { showToast('❌ 로그인이 필요해요'); return; }

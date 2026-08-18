@@ -168,6 +168,43 @@ async function vapidAuthHeader(env, audience) {
 // (조용히 실패하면 "왜 안 오지?"를 영영 못 푼다. 실제로 그런 일을 한 번 겪었다.)
 // 매일 기록 알림의 실제 판단·발송. cron(scheduled)과 '지금 보내보기' 둘 다 이걸 부른다.
 // force=true면 시각·중복 검사를 건너뛴다(테스트용).
+// 금액이 매달 다른 정기지출(관리비 등): 그날이 되면 "금액을 입력하세요"라고 알린다.
+// 자동등록은 못 한다 — 얼마인지 모르니까. 대신 잊지 않게 알려주는 것까지가 서버 몫이다.
+// 이미 그 달에 등록됐거나(recurring_applied) 오늘 이미 알렸으면 다시 보내지 않는다.
+async function runVariableRecurringAlerts(env, force = false) {
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const today = kst.toISOString().slice(0, 10);
+  const ym = today.slice(0, 7);
+  const todayDay = Number(today.slice(8, 10));
+  const lastDay = new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).getUTCDate();
+
+  const rules = (await env.DB.prepare(
+    `SELECT id, name, amount, category, day FROM recurring_rules WHERE variable = 1`
+  ).all()).results ?? [];
+
+  const sent = [];
+  for (const r of rules) {
+    const due = Math.min(r.day, lastDay);          // 31일 규칙이 30일 달에서 없는 날이 되지 않도록
+    if (!force && todayDay !== due) continue;      // 그날에만
+    const applied = await env.DB.prepare(
+      `SELECT 1 AS x FROM recurring_applied WHERE rule_id = ?1 AND ym = ?2`
+    ).bind(r.id, ym).first();
+    if (applied) continue;                          // 이미 이번 달에 넣었다
+    const markKey = `varalert_${r.id}_${ym}`;
+    if (!force && (await getSetting(env, markKey))) continue;   // 오늘 이미 알렸다
+    await setSetting(env, markKey, today);
+    await recordAndPush(env, {
+      kind: 'need_amount',
+      name: r.name,
+      amount: Number(r.amount) || 0,   // 참고용(지난번 금액)
+      category: r.category || '',
+      user_name: '', card: '',
+    });
+    sent.push(r.name);
+  }
+  return { sent };
+}
+
 async function runDailyReminder(env, force = false) {
   const raw = await getSetting(env, 'reminder');
   const r = raw ? safeParse(raw) : null;
@@ -196,6 +233,14 @@ async function runDailyReminder(env, force = false) {
     amount: 0, category: '', user_name: '', card: '',
   });
   return { sentAt: kstNow, time: r.time, push: report };
+}
+
+// 푸시는 사용자를 기다리게 하지 않는다. 응답을 먼저 보내고 백그라운드로 보낸다.
+// (거래 저장에서 애플·구글 서버 왕복을 기다리면 저장이 느려져, 사용자가 저장 버튼을 여러 번 눌러
+//  같은 거래가 두세 번 등록되는 일이 실제로 있었다)
+function bgPush(ctx, promise) {
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(promise.catch(() => {}));
+  return promise.catch(() => {});
 }
 
 async function sendPushToAll(env) {
@@ -542,7 +587,7 @@ function appVersion(env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -770,7 +815,7 @@ export default {
         ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.user_name, tx.card).run();
         const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(id).first();
         // 등록되면 두 사람 모두에게 알림. 실패해도 저장은 이미 끝났으므로 응답을 막지 않는다.
-        await recordAndPush(env, { kind: 'add', name: tx.name, amount: tx.amount, category: tx.category, user_name: tx.user_name, card: tx.card });
+        bgPush(ctx, recordAndPush(env, { kind: 'add', name: tx.name, amount: tx.amount, category: tx.category, user_name: tx.user_name, card: tx.card }));
         return json({ tx: row });
       }
 
@@ -825,7 +870,7 @@ export default {
           ).bind(crypto.randomUUID(), date, String(b.category), String(b.name), amt, memo, user_name, card, groupId, k, months));
         }
         await env.DB.batch(stmts);
-        await recordAndPush(env, { kind: 'add', name: `${b.name} (${months}개월 할부)`, amount: total, category: String(b.category), user_name, card });
+        bgPush(ctx, recordAndPush(env, { kind: 'add', name: `${b.name} (${months}개월 할부)`, amount: total, category: String(b.category), user_name, card }));
         return json({ ok: true, installment_id: groupId, months, monthly_first: base + rem, monthly_rest: base });
       }
 
@@ -937,6 +982,11 @@ export default {
       if (path === '/api/settings/reminder/run' && request.method === 'POST') {
         const force = url.searchParams.get('force') !== '0';
         return json(await runDailyReminder(env, force));
+      }
+
+      // 금액 변동 정기지출 알림을 지금 보내본다(확인용). cron도 같은 함수를 쓴다.
+      if (path === '/api/recurring/alert-now' && request.method === 'POST') {
+        return json(await runVariableRecurringAlerts(env, url.searchParams.get('force') !== '0'));
       }
 
       // 알림이 실제로 오는지 확인용(설정 화면의 '테스트 알림 보내기')
@@ -1101,7 +1151,7 @@ export default {
           `UPDATE transactions SET deleted_at = datetime('now') WHERE installment_id = ?1 AND deleted_at IS NULL`
         ).bind(gid).run();
         if (!r.meta.changes) return json({ error: '취소할 할부를 찾지 못했어요' }, 404);
-        if (one) await recordAndPush(env, { kind: 'delete', name: `${one.name} (할부 취소)`, amount: one.amount, category: one.category, user_name: one.user_name, card: one.card });
+        if (one) bgPush(ctx, recordAndPush(env, { kind: 'delete', name: `${one.name} (할부 취소)`, amount: one.amount, category: one.category, user_name: one.user_name, card: one.card }));
         return json({ ok: true, cancelled: r.meta.changes });
       }
 
@@ -1148,13 +1198,13 @@ export default {
         ).bind(txId).run();
         if (!r.meta.changes) return json({ error: '삭제할 거래를 찾지 못했어요' }, 404);
         // 삭제도 두 사람에게 알림.
-        if (gone) await recordAndPush(env, { kind: 'delete', ...gone });
+        if (gone) bgPush(ctx, recordAndPush(env, { kind: 'delete', ...gone }));
         return json({ ok: true });
       }
 
       // ── 정기 지출 규칙 ──
       if (path === '/api/recurring' && request.method === 'GET') {
-        const r = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules ORDER BY day`).all();
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules ORDER BY day`).all();
         return json({ rules: r.results ?? [] });
       }
 
@@ -1166,10 +1216,12 @@ export default {
         if (!Number.isInteger(amount) || amount <= 0) return json({ error: '금액은 1원 이상의 정수여야 해요' }, 400);
         if (!Number.isInteger(day) || day < 1 || day > 31) return json({ error: '날짜는 1~31 사이여야 해요' }, 400);
         const id = crypto.randomUUID();
+        // variable=1 이면 '날짜는 같지만 금액이 매달 다른' 규칙(관리비 등) — 자동등록 대신 알림만 간다.
+        const variable = b?.variable ? 1 : 0;
         await env.DB.prepare(
-          `INSERT INTO recurring_rules (id, name, amount, category, day) VALUES (?1,?2,?3,?4,?5)`
-        ).bind(id, String(b.name), amount, String(b.category), day).run();
-        const r = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules ORDER BY day`).all();
+          `INSERT INTO recurring_rules (id, name, amount, category, day, variable) VALUES (?1,?2,?3,?4,?5,?6)`
+        ).bind(id, String(b.name), amount, String(b.category), day, variable).run();
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules ORDER BY day`).all();
         return json({ rules: r.results ?? [] });
       }
 
@@ -1178,7 +1230,7 @@ export default {
         await env.DB.prepare(`DELETE FROM recurring_applied WHERE rule_id = ?1`).bind(id).run();
         const d = await env.DB.prepare(`DELETE FROM recurring_rules WHERE id = ?1`).bind(id).run();
         if (!d.meta.changes) return json({ error: '정기 지출을 찾지 못했어요' }, 404);
-        const r = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules ORDER BY day`).all();
+        const r = await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules ORDER BY day`).all();
         return json({ rules: r.results ?? [] });
       }
 
@@ -1197,9 +1249,12 @@ export default {
         const todayDay = Number(today.slice(8, 10));
         const lastDay = new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).getUTCDate();
 
-        const rules = (await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules`).all()).results ?? [];
+        const rules = (await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules`).all()).results ?? [];
         const created = [];
         for (const rule of rules) {
+          // 금액이 매달 다른 규칙은 자동으로 넣을 수 없다(얼마인지 모른다). 그날 알림만 보내고
+          // 사용자가 금액을 넣을 때 등록된다. 여기서 넣어버리면 틀린 금액이 조용히 쌓인다.
+          if (rule.variable) continue;
           const day = Math.min(rule.day, lastDay); // 31일 규칙이 30일 달에서 없는 날짜가 되지 않도록
           if (day > todayDay) continue;            // 아직 그날이 안 됨
           const txId = crypto.randomUUID();
@@ -1304,7 +1359,7 @@ export default {
            FROM transactions WHERE deleted_at IS NULL ORDER BY date`
         ).all();
         const bud = await env.DB.prepare(`SELECT id, month, category, amount FROM budgets`).all();
-        const rec = await env.DB.prepare(`SELECT id, name, amount, category, day FROM recurring_rules`).all();
+        const rec = await env.DB.prepare(`SELECT id, name, amount, category, day, variable FROM recurring_rules`).all();
         const cat = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories`).all();
         const catOv = await getSetting(env, 'category_overrides');
         const cardSet = await getSetting(env, 'card_settings');
@@ -1412,6 +1467,8 @@ export default {
     try {
       const r = await runDailyReminder(env);
       if (r && r.sentAt) console.log('매일 알림 발송:', JSON.stringify(r));
+      const v = await runVariableRecurringAlerts(env);
+      if (v && v.sent.length) console.log('금액 입력 알림:', JSON.stringify(v));
     } catch (e) {
       console.warn('매일 알림 실패:', String(e?.message || e));
     }
