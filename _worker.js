@@ -658,6 +658,14 @@ export default {
       const auth = request.headers.get('Authorization') || '';
       const session = await verifyToken(auth.replace(/^Bearer\s+/i, ''), env.SESSION_SECRET);
       if (!session) return json({ error: '로그인이 필요해요' }, 401);
+      // 서명만 맞으면 통과시키면, 계정을 지워도 그 토큰은 90일 내내 살아 있다.
+      // 토큰이 가리키는 계정이 실제로 있는지 확인한다(계정 삭제 = 즉시 접근 차단).
+      // u가 없는 건 개인 계정 이전의 옛 토큰이라 다시 로그인시킨다.
+      {
+        const uid = session.u;
+        const who = uid ? await env.DB.prepare(`SELECT id FROM users WHERE id = ?1`).bind(uid).first() : null;
+        if (!who) return json({ error: '다시 로그인해 주세요' }, 401);
+      }
 
       if (path === '/api/me' && request.method === 'GET') {
         return json({ name: session.n, id: session.u || null });
