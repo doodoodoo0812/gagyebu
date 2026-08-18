@@ -348,6 +348,23 @@ body {
   border-color: var(--accent);
 }
 .form-input.amount { font-family: var(--font-mono); font-size: 18px; font-weight: 600; }
+
+/* 입력한 칸은 빈 칸과 확실히 달라 보이게 — 뭘 넣었고 뭐가 비었는지 한눈에 확인되도록.
+   :not(:placeholder-shown)은 '값이 들어 있는' 상태라 자바스크립트 없이도 맞는다.
+   (placeholder가 있는 칸에만 통하므로, 선택칸은 아래 .has-value로 따로 표시한다) */
+.form-input:not(:placeholder-shown),
+.form-textarea:not(:placeholder-shown),
+.form-select.has-value {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  font-weight: 600;
+}
+/* 금액은 이 화면의 주인공이라 더 또렷하게. */
+.form-input.amount:not(:placeholder-shown) {
+  color: var(--accent);
+  border-color: var(--accent);
+  border-width: 2px;
+}
 .form-textarea { resize: none; min-height: 70px; }
 .form-select option { background: var(--bg2); }
 
@@ -2068,6 +2085,21 @@ document.addEventListener('visibilitychange', () => {
   else { maybeLockOnOpen(); }
 });
 
+// 선택칸(카드·할부 등)은 :placeholder-shown이 안 통해서, 값이 있으면 클래스를 붙여 표시한다.
+// '선택 안 함'(빈 값)이나 '일시불'(기본값)은 고른 게 아니므로 표시하지 않는다.
+function markSelectFilled(el) {
+  if (!el) return;
+  const v = String(el.value || '');
+  const isDefault = (v === '' || (el.id === 'tx-installment' && v === '1'));
+  el.classList.toggle('has-value', !isDefault);
+}
+function refreshFilledMarks() {
+  ['tx-card', 'tx-installment', 'rec-cat', 'budget-cat'].forEach(id => markSelectFilled(document.getElementById(id)));
+}
+document.addEventListener('change', e => {
+  if (e.target && e.target.classList && e.target.classList.contains('form-select')) markSelectFilled(e.target);
+});
+
 // ===== 새 버전 감지 =====
 // 상단 🔄는 '데이터'만 다시 받아온다. 앱 코드(화면·기능)는 그대로라, 새 버전을 배포해도
 // 홈 화면에 설치된 앱은 옛 코드로 계속 돌 수 있다. 그걸 알려주고 한 번에 갈아타게 한다.
@@ -3407,6 +3439,7 @@ function openAddModal(tx = null, clone = false) {
   updateInstallmentHint();
   renderCategoryGrid(currentTxType);
   renderNameChips();
+  refreshFilledMarks();
   openModal('add-modal');
   // 자동 포커스 안 함 — + 누르자마자 숫자 키패드가 튀어나오는 게 불편하다는 요청.
   // 금액칸을 직접 탭할 때만 키패드가 뜬다.
@@ -4429,6 +4462,7 @@ function parseSmsText(text) {
     instSel.value = String(result.months);
   }
   updateInstallmentHint();
+  refreshFilledMarks();
   renderCategoryGrid(currentTxType);
 
   resultEl.style.display = 'block';
