@@ -19,6 +19,9 @@
      페이지 스크린샷을 박아넣는다. iOS는 manifest의 icons가 아니라 이걸 본다. -->
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512.png">
+<!-- 배포 시 워커가 __APP_VERSION__을 지금 배포 버전으로 바꿔 넣는다.
+     앱은 이 값을 '내가 받은 버전'으로 기억했다가 /api/version과 비교해 새 버전을 알아챈다. -->
+<meta name="app-version" content="__APP_VERSION__">
 <title>우리집 가계부</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1454,6 +1457,16 @@ body {
   <div onclick="unlockWithPassword()" style="font-size:13px;color:var(--accent);cursor:pointer;margin-top:4px">비밀번호로 열기</div>
 </div>
 
+<!-- 새 버전 배너. 앱이 옛 코드로 계속 도는 걸 사용자가 알 방법이 없어서 만든다.
+     상단 🔄는 '데이터'만 다시 받아오지 앱 코드는 바꾸지 않는다. -->
+<div id="update-banner" style="display:none;position:fixed;left:0;right:0;bottom:calc(60px + env(safe-area-inset-bottom));z-index:300;padding:0 12px">
+  <div style="max-width:406px;margin:0 auto;background:var(--accent);color:var(--bg);border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:10px;box-shadow:0 6px 24px rgba(0,0,0,0.28)">
+    <div style="flex:1;font-size:13px;font-weight:600">✨ 새 버전이 나왔어요</div>
+    <button onclick="applyUpdate()" style="flex-shrink:0;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;background:var(--bg);color:var(--accent);cursor:pointer">지금 새로고침</button>
+    <button onclick="document.getElementById('update-banner').style.display='none'" style="flex-shrink:0;border:none;background:transparent;color:var(--bg);font-size:16px;cursor:pointer;opacity:.8">✕</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -2042,6 +2055,41 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { appUnlocked = false; }
   else { maybeLockOnOpen(); }
 });
+
+// ===== 새 버전 감지 =====
+// 상단 🔄는 '데이터'만 다시 받아온다. 앱 코드(화면·기능)는 그대로라, 새 버전을 배포해도
+// 홈 화면에 설치된 앱은 옛 코드로 계속 돌 수 있다. 그걸 알려주고 한 번에 갈아타게 한다.
+const MY_APP_VERSION = (document.querySelector('meta[name="app-version"]')?.content || '').trim();
+
+async function checkAppVersion() {
+  // 로컬(dev)이나 버전을 못 받은 경우엔 조용히 넘어간다.
+  if (!MY_APP_VERSION || MY_APP_VERSION === '__APP_VERSION__' || MY_APP_VERSION === 'dev') return;
+  try {
+    const res = await fetch('/api/version', { cache: 'no-store' });
+    if (!res.ok) return;
+    const { version } = await res.json();
+    if (version && version !== MY_APP_VERSION) {
+      document.getElementById('update-banner').style.display = 'block';
+    }
+  } catch (e) { /* 네트워크가 없으면 그냥 넘어간다 */ }
+}
+
+// 서비스워커·캐시까지 정리하고 새로 받는다. 그냥 reload만 하면 캐시된 옛 화면이 다시 뜰 수 있다.
+async function applyUpdate() {
+  showToast('⏳ 새 버전을 받는 중…');
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) await reg.update();
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      // 푸시용 토큰 캐시는 지우면 알림 문구를 못 만든다. 그것만 남긴다.
+      await Promise.all(keys.filter(k => k !== PUSH_TOKEN_CACHE).map(k => caches.delete(k)));
+    }
+  } catch (e) { /* 실패해도 새로고침은 한다 */ }
+  location.reload();
+}
 
 // ===== 웹푸시 (앱이 꺼져 있어도 알림) =====
 // 아이폰은 '홈 화면에 추가'로 설치한 상태에서만 웹푸시가 동작한다(사파리 탭에서는 안 온다).
@@ -2650,6 +2698,7 @@ async function syncData() {
   await loadData();
   btn.textContent = '🔄';
   showToast('✅ 새로고침 완료 — 최신 내용을 불러왔어요');
+  checkAppVersion();   // 데이터뿐 아니라 '앱 새 버전'도 이때 같이 확인한다
 }
 
 // ===== RENDER =====
@@ -5072,6 +5121,10 @@ function fmtMoneyShort(n) {
 // Register SW
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
+  // 새 버전 확인: 앱을 열 때, 다시 앞으로 가져올 때, 그리고 30분마다.
+  checkAppVersion();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkAppVersion(); });
+  setInterval(checkAppVersion, 30 * 60 * 1000);
 }
 </script>
 </body>

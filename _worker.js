@@ -533,6 +533,12 @@ async function callGemini(env, key, body) {
   return { text: r.data?.candidates?.[0]?.content?.parts?.[0]?.text || '' };
 }
 
+// 지금 배포된 버전. 배포할 때마다 Cloudflare가 새 id를 준다(수동으로 번호를 올릴 필요가 없다).
+// 바인딩이 없는 로컬 개발에서는 'dev'로 떨어져 '새 버전' 알림이 뜨지 않는다.
+function appVersion(env) {
+  return String(env?.CF_VERSION_METADATA?.id || 'dev');
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -542,8 +548,23 @@ export default {
 
     // API가 아니면 정적 자산(앱)
     if (!path.startsWith('/api/')) {
-      if (env.ASSETS) return env.ASSETS.fetch(request);
-      return new Response('Not found', { status: 404 });
+      if (!env.ASSETS) return new Response('Not found', { status: 404 });
+      const res = await env.ASSETS.fetch(request);
+      // 앱 화면(HTML)에는 '지금 배포된 버전'을 심어준다. 앱은 이 값을 자기 버전으로 기억했다가
+      // /api/version과 비교해 다르면 "새 버전이 있어요"를 띄운다.
+      // 심어주지 않으면 앱이 자기가 언제 받은 코드인지 알 방법이 없다(서버 값만 보면 늘 최신으로 보인다).
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('text/html')) {
+        const html = await res.text();
+        const out = html.replace(/__APP_VERSION__/g, appVersion(env));
+        return new Response(out, { status: res.status, headers: res.headers });
+      }
+      return res;
+    }
+
+    // 배포 버전 확인. 로그인 전에도 물을 수 있어야 한다(새 버전 안내는 비밀이 아니다).
+    if (path === '/api/version' && request.method === 'GET') {
+      return json({ version: appVersion(env) });
     }
 
     if (!env.APP_PASSWORD || !env.SESSION_SECRET) {
