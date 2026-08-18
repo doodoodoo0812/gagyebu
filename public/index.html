@@ -2124,10 +2124,22 @@ function pushSupported() {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 }
 
+// navigator.serviceWorker.ready 는 서비스워커가 없으면 '영원히' 안 끝난다(거부도 안 한다).
+// 그대로 await 하면 알림 상태 표시·[알림 켜기]·[지금 보내보기]가 아무 말 없이 멈춘다.
+// (사파리 사생활 모드, sw.js 로드 실패 등에서 실제로 그렇게 된다) 그래서 제한 시간을 둔다.
+function swReady(ms = 5000) {
+  if (!('serviceWorker' in navigator)) return Promise.resolve(null);
+  return Promise.race([
+    navigator.serviceWorker.ready.catch(() => null),
+    new Promise(r => setTimeout(() => r(null), ms)),
+  ]);
+}
+
 async function currentPushSub() {
   if (!pushSupported()) return null;
   try {
-    const reg = await navigator.serviceWorker.ready;
+    const reg = await swReady();
+    if (!reg) return null;      // 서비스워커가 준비 안 됨 → 알림 기능은 못 쓴다(멈추지는 않는다)
     return await reg.pushManager.getSubscription();
   } catch (e) { return null; }
 }
@@ -2196,7 +2208,8 @@ async function enablePush({ silent = false, toast = false } = {}) {
     }
     const { key } = await api('/push/key');
     if (!key) { if (toast) showToast('서버에 알림 키가 없어요'); return false; }
-    const reg = await navigator.serviceWorker.ready;
+    const reg = await swReady();
+    if (!reg) { showToast('앱 준비가 아직 안 됐어요. 앱을 껐다 켜고 다시 시도해 주세요'); return; }
     const newSub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(key),
