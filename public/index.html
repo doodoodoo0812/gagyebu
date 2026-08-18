@@ -347,23 +347,49 @@ body {
 .form-input:focus, .form-select:focus, .form-textarea:focus {
   border-color: var(--accent);
 }
-.form-input.amount { font-family: var(--font-mono); font-size: 18px; font-weight: 600; }
+/* ===== 실제로 만지는 칸을 눈에 띄게 =====
+   거래추가 화면에서 손이 가는 곳은 금액·카드·할부·날짜다. 그런데 전부 흰 상자에 옅은 테두리라
+   어디를 눌러야 하는지 한눈에 안 들어왔다. 특히 선택칸은 -webkit-appearance:none 때문에
+   기본 화살표까지 사라져 '그냥 글자'처럼 보였다. 각각 확실히 살린다. */
 
-/* 입력한 칸은 빈 칸과 확실히 달라 보이게 — 뭘 넣었고 뭐가 비었는지 한눈에 확인되도록.
-   :not(:placeholder-shown)은 '값이 들어 있는' 상태라 자바스크립트 없이도 맞는다.
-   (placeholder가 있는 칸에만 통하므로, 선택칸은 아래 .has-value로 따로 표시한다) */
+/* 금액 — 이 화면의 주인공. 비어 있을 때부터 또렷하게. */
+.form-input.amount {
+  font-family: var(--font-mono); font-size: 22px; font-weight: 700;
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  color: var(--accent);
+  letter-spacing: 0.5px;
+}
+.form-input.amount::placeholder { color: color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 600; }
+
+/* 선택칸 — 누를 수 있는 곳임을 화살표로 알린다(기본 화살표가 지워져 있었다). */
+.form-select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'><path d='M1 1l6 6 6-6' fill='none' stroke='%234c63b6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 38px;
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 날짜 — 옅어서 잘 안 보인다는 피드백. 또렷하게. */
+#tx-date, #budget-month {
+  border: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  font-weight: 700; text-align: center; color: var(--text);
+}
+
+/* 값이 들어간 칸은 빈 칸과 확실히 달라 보이게. background-color만 바꿔 선택칸 화살표를 지우지 않는다. */
 .form-input:not(:placeholder-shown),
 .form-textarea:not(:placeholder-shown),
 .form-select.has-value {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  background-color: color-mix(in srgb, var(--accent) 10%, var(--surface));
   font-weight: 600;
 }
-/* 금액은 이 화면의 주인공이라 더 또렷하게. */
+.form-select.has-value { border-width: 2px; color: var(--accent); }
 .form-input.amount:not(:placeholder-shown) {
-  color: var(--accent);
-  border-color: var(--accent);
-  border-width: 2px;
+  background-color: color-mix(in srgb, var(--accent) 12%, var(--surface));
 }
 .form-textarea { resize: none; min-height: 70px; }
 .form-select option { background: var(--bg2); }
@@ -706,8 +732,10 @@ body {
   <div class="topbar">
     <div class="topbar-title">💰 가계부</div>
     <div class="topbar-actions">
-      <!-- 테마 입구는 설정 한 곳으로 일원화(테마는 한 번 정하면 끝). 상단바는 새로고침만. -->
-      <div class="icon-btn" id="sync-btn" onclick="syncData()" title="새로고침 — 최신 내용 다시 불러오기">🔄</div>
+      <!-- 상단바 아이콘 두 개는 하는 일이 다르다. 헷갈리지 않게 모양을 확실히 구분한다.
+           🔄 = 데이터(거래 내역) 다시 받기  /  ⬇️ = 앱 자체를 최신 버전으로 교체 -->
+      <div class="icon-btn" id="sync-btn" onclick="syncData()" title="데이터 새로고침 — 최신 내용 다시 불러오기">🔄</div>
+      <div class="icon-btn" id="update-btn" onclick="applyUpdate()" title="앱 최신 버전 받기">⬇️</div>
     </div>
   </div>
 
@@ -1060,22 +1088,6 @@ body {
     <div class="settings-section">
       <div class="settings-title">테마</div>
       <div class="theme-grid" id="theme-grid-settings"></div>
-    </div>
-
-    <!-- 새 버전 배너는 '새로 배포된 뒤'에만 뜬다. 그래서 사용자가 원할 때 직접 누를 수 있는
-         상시 버튼이 따로 필요하다(무언가 이상할 때 가장 먼저 해보게 되는 동작이기도 하다). -->
-    <div class="settings-section">
-      <div class="settings-title">앱</div>
-      <div class="settings-item" onclick="applyUpdate()">
-        <div class="settings-item-left">
-          <div class="settings-item-icon">⬇️</div>
-          <div>
-            <div class="settings-item-text">앱 새로고침 (최신 버전 받기)</div>
-            <div class="settings-item-sub" id="app-version-sub">화면이 이상하거나 새 기능이 안 보일 때</div>
-          </div>
-        </div>
-        <div class="settings-item-right">›</div>
-      </div>
     </div>
 
     <div style="text-align:center;padding:20px;color:var(--text3);font-size:12px">
@@ -2122,9 +2134,13 @@ document.addEventListener('change', e => {
 const MY_APP_VERSION = (document.querySelector('meta[name="app-version"]')?.content || '').trim();
 
 // 설정 화면에 '지금 최신인지'를 적어준다. 눌러야 할지 말지 알 수 있어야 한다.
-function showVersionSub(text) {
-  const el = document.getElementById('app-version-sub');
-  if (el) el.textContent = text;
+// 새 버전이 있으면 상단 ⬇️ 아이콘을 눈에 띄게 바꾼다(있을 때만 알아채면 된다).
+function markUpdateAvailable(available) {
+  const b = document.getElementById('update-btn');
+  if (!b) return;
+  b.textContent = available ? '✨' : '⬇️';
+  b.title = available ? '새 버전이 나왔어요 — 눌러서 받기' : '앱 최신 버전 받기';
+  b.style.filter = available ? 'drop-shadow(0 0 6px var(--accent))' : '';
 }
 
 async function checkAppVersion() {
@@ -2136,9 +2152,9 @@ async function checkAppVersion() {
     const { version } = await res.json();
     if (version && version !== MY_APP_VERSION) {
       document.getElementById('update-banner').style.display = 'block';
-      showVersionSub('✨ 새 버전이 나왔어요 — 눌러서 받기');
+      markUpdateAvailable(true);
     } else {
-      showVersionSub('지금이 최신이에요 · 눌러도 안전해요');
+      markUpdateAvailable(false);
     }
   } catch (e) { /* 네트워크가 없으면 그냥 넘어간다 */ }
 }
