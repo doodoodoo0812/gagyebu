@@ -7,3 +7,6 @@
 # wrangler 작업 파일 (로컬 D1 사본 등)
 .wrangler/
 node_modules/
+
+# 가입 코드(계정 생성·비밀번호 재설정용). 절대 커밋하지 않는다.
+가입코드.txt
