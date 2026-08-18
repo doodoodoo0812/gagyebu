@@ -171,7 +171,7 @@ async function vapidAuthHeader(env, audience) {
 async function runDailyReminder(env, force = false) {
   const raw = await getSetting(env, 'reminder');
   const r = raw ? safeParse(raw) : null;
-  if (!r || !r.enabled || !r.time) return { skipped: '알림이 꺼져 있어요' };
+  if (!r || !r.enabled || !r.time) return { skipped: '매일 기록 알림이 아직 설정되지 않았어요 (시간을 정하고 [알림 설정]을 눌러주세요)' };
 
   // 서버 시각은 UTC다. 한국 시각으로 바꿔서 비교한다(+9시간).
   const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);

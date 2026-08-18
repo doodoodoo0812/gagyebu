@@ -909,7 +909,7 @@ body {
         <div class="settings-item-left">
           <div class="settings-item-icon">⏰</div>
           <div>
-            <div class="settings-item-text">가계부 기록 알림</div>
+            <div class="settings-item-text">가계부 기록 알림 (매일 정해진 시각)</div>
             <div class="settings-item-sub" id="alarm-time-display">설정 안됨</div>
           </div>
         </div>
@@ -4835,6 +4835,18 @@ async function loadAlarmSettings() {
   try {
     if (demoMode || !authToken) return;
     reminderSetting = (await api('/settings/reminder')).reminder;
+    // 예전 버전은 이 설정을 폰 안(localStorage)에만 뒀다. 그대로 두면 사용자는 "9시로 해놨는데
+    // 왜 안 오지?"가 된다(서버엔 아무것도 없으니 cron이 보낼 게 없다). 한 번 서버로 옮겨준다.
+    const oldTime = localStorage.getItem('alarm_time');
+    if (oldTime && !(reminderSetting && reminderSetting.enabled)) {
+      const oldMsg = localStorage.getItem('alarm_message') || '가계부 기록할 시간이에요! 💰';
+      try {
+        const r = await api('/settings/reminder', { method: 'POST', body: { enabled: true, time: oldTime, message: oldMsg } });
+        reminderSetting = r.reminder;
+        showToast(`⏰ 기존 ${oldTime} 알림을 서버로 옮겼어요 (이제 앱이 꺼져 있어도 옵니다)`);
+      } catch (e) { /* 실패해도 앱은 정상 동작 */ }
+    }
+    if (oldTime) { localStorage.removeItem('alarm_time'); localStorage.removeItem('alarm_message'); }
   } catch (e) { /* 실패해도 앱은 정상 동작 */ }
   renderAlarmSetting();
 }
@@ -4889,6 +4901,17 @@ async function runReminderNow() {
   const sub = await currentPushSub();
   if (!sub) { showToast('먼저 [설정 › 새 거래 알림]을 켜주세요'); return; }
   try {
+    // 시간만 고르고 [알림 설정]을 안 눌렀으면 저장이 안 돼 있다. 눌러야만 되는 걸 모르는 게 자연스러우니
+    // 여기서 알아서 저장하고 보낸다(안 그러면 '알림이 꺼져 있어요'만 뜨고 왜인지 알 수 없다).
+    if (!(reminderSetting && reminderSetting.enabled)) {
+      const t = document.getElementById('alarm-time-input').value;
+      const m = document.getElementById('alarm-message-input').value || '가계부 기록할 시간이에요! 💰';
+      if (/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) {
+        const s = await api('/settings/reminder', { method: 'POST', body: { enabled: true, time: t, message: m } });
+        reminderSetting = s.reminder;
+        renderAlarmSetting();
+      }
+    }
     const r = await api('/settings/reminder/run', { method: 'POST' });
     if (r.skipped) { showToast('보내지 않음: ' + r.skipped); return; }
     const ok = (r.push && r.push.sent) || 0;
