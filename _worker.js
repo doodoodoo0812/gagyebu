@@ -187,7 +187,9 @@ async function runDailyReminder(env, force = false) {
     if (nowMin - targetMin > 120) return { skipped: `${r.time}에서 2시간 넘게 지남 (지금 ${kstNow})` };
     if ((await getSetting(env, 'reminder_last')) === today) return { skipped: '오늘은 이미 보냈어요' };
   }
-  await setSetting(env, 'reminder_last', today);   // 먼저 표시해 중복 발송 방지
+  // '오늘 보냄' 표시는 진짜 정기 발송일 때만 남긴다.
+  // 테스트로 보낸 것까지 표시해버리면 그날 밤 진짜 알림이 '이미 보냈다'며 안 나간다(실제로 그랬다).
+  if (!force) await setSetting(env, 'reminder_last', today);   // 먼저 표시해 중복 발송 방지
   const report = await recordAndPush(env, {
     kind: 'reminder',
     name: r.message || '가계부 기록할 시간이에요! 💰',
