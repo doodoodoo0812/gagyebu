@@ -92,7 +92,11 @@ self.addEventListener('push', e => {
         if (res.ok) {
           const d = await res.json();
           const t = d && d.latest;
-          if (t) {
+          if (t && t.kind === 'reminder') {
+            // 매일 기록 알림 — 금액·카테고리가 없으므로 문구만 보여준다.
+            title = '💰 우리집 가계부';
+            body = t.name || '가계부 기록할 시간이에요!';
+          } else if (t) {
             const who = t.user_name ? `${t.user_name} · ` : '';
             const card = t.card ? ` (${t.card})` : '';
             const verb = t.kind === 'delete' ? '🗑️ 삭제됨' : '✍️ 등록됨';

@@ -1363,7 +1363,9 @@ body {
       <label class="form-label">알림 메시지</label>
       <input class="form-input" id="alarm-message-input" placeholder="가계부 기록할 시간이에요! 💰" value="가계부 기록할 시간이에요! 💰">
     </div>
+    <div id="alarm-push-note" style="font-size:12px;margin-bottom:10px;line-height:1.5"></div>
     <button class="btn-primary" onclick="saveAlarm()">알림 설정</button>
+    <button class="btn-secondary" onclick="runReminderNow()" style="margin-top:8px">📨 지금 보내보기 (확인용)</button>
     <button class="btn-secondary" onclick="cancelAlarm()" style="margin-top:8px;color:var(--expense)">알림 취소</button>
     <button class="btn-secondary" onclick="closeModal('alarm-modal')" style="margin-top:6px">닫기</button>
   </div>
@@ -4821,66 +4823,86 @@ async function deleteMonthReceipts() {
 }
 
 // ===== ALARM =====
-let alarmInterval = null;
+// 매일 기록 알림.
+// 예전엔 앱 안에서 setInterval로 시계를 보다가 new Notification()을 띄웠는데, 세 가지가 겹쳐 안 떴다:
+//   ① 앱이 꺼지면 타이머가 멈춘다(아이폰은 백그라운드로 가는 즉시 얼린다) → 9시에 앱이 떠 있어야만 동작
+//   ② iOS는 new Notification()을 아예 지원하지 않는다 → 앱이 열려 있어도 아이폰에선 불가능
+//   ③ 30초마다 분을 비교해 같은 분에 두 번 뜰 수 있었다
+// 이제 설정은 서버에 저장하고(부부 공유), 서버 cron이 그 시각에 푸시를 보낸다.
+let reminderSetting = null;
 
-function loadAlarmSettings() {
-  const time = localStorage.getItem('alarm_time');
-  const msg = localStorage.getItem('alarm_message');
-  if (time) {
-    document.getElementById('alarm-time-display').textContent = `매일 ${time} 알림`;
-    document.getElementById('alarm-time-input').value = time;
-  }
-  if (msg) document.getElementById('alarm-message-input').value = msg;
-  if (time) scheduleAlarm(time, msg || '가계부 기록할 시간이에요! 💰');
+async function loadAlarmSettings() {
+  try {
+    if (demoMode || !authToken) return;
+    reminderSetting = (await api('/settings/reminder')).reminder;
+  } catch (e) { /* 실패해도 앱은 정상 동작 */ }
+  renderAlarmSetting();
 }
 
-function openAlarmModal() {
+function renderAlarmSetting() {
+  const disp = document.getElementById('alarm-time-display');
+  const r = reminderSetting;
+  if (disp) {
+    disp.textContent = (r && r.enabled && r.time) ? `매일 ${r.time} 알림` : '설정 안됨';
+  }
+  if (r && r.time) {
+    const ti = document.getElementById('alarm-time-input');
+    if (ti) ti.value = r.time;
+  }
+  if (r && r.message) {
+    const mi = document.getElementById('alarm-message-input');
+    if (mi) mi.value = r.message;
+  }
+}
+
+async function openAlarmModal() {
   openModal('alarm-modal');
+  renderAlarmSetting();
+  // 이 알림은 웹푸시로 간다. 푸시가 꺼져 있으면 시간을 정해도 아무 일이 안 일어나므로 미리 알린다.
+  const note = document.getElementById('alarm-push-note');
+  if (note) {
+    const sub = await currentPushSub();
+    note.innerHTML = sub
+      ? '<span style="color:var(--income)">✅ 알림이 켜져 있어요 — 이 시각에 폰으로 옵니다</span>'
+      : '<span style="color:var(--expense)">⚠️ 먼저 [설정 › 새 거래 알림]을 켜야 이 알림이 옵니다</span>';
+  }
 }
 
 async function saveAlarm() {
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
   const time = document.getElementById('alarm-time-input').value;
   const msg = document.getElementById('alarm-message-input').value || '가계부 기록할 시간이에요! 💰';
-
-  // Request notification permission
-  if ('Notification' in window) {
-    const perm = await Notification.requestPermission();
-    if (perm !== 'granted') {
-      alert('알림 권한이 필요해요.\n설정 → Safari → 알림 허용으로 변경해 주세요.');
-      return;
-    }
-  } else {
-    alert('이 브라우저는 알림을 지원하지 않아요.');
-    return;
-  }
-
-  localStorage.setItem('alarm_time', time);
-  localStorage.setItem('alarm_message', msg);
-  document.getElementById('alarm-time-display').textContent = `매일 ${time} 알림`;
-  scheduleAlarm(time, msg);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) { showToast('시간을 확인해 주세요'); return; }
+  try {
+    const r = await api('/settings/reminder', { method: 'POST', body: { enabled: true, time, message: msg } });
+    reminderSetting = r.reminder;
+  } catch (e) { showToast('❌ 저장 실패: ' + e.message); return; }
+  renderAlarmSetting();
   closeModal('alarm-modal');
-  showToast(`✅ 매일 ${time}에 알림이 설정됐어요`);
+  const sub = await currentPushSub();
+  showToast(sub ? `✅ 매일 ${time}에 알림이 갑니다` : `✅ ${time} 저장됨 — [새 거래 알림]을 켜야 실제로 옵니다`);
 }
 
-function scheduleAlarm(time, msg) {
-  if (alarmInterval) clearInterval(alarmInterval);
-  alarmInterval = setInterval(() => {
-    const now = new Date();
-    const cur = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
-    if (cur === time) {
-      new Notification('💰 우리집 가계부', {
-        body: msg,
-        icon: '/icons/icon-192.png'   // 옛 GitHub Pages 경로(/gagyebu/icon.png)라 없는 파일이었다
-      });
-    }
-  }, 30000); // Check every 30 seconds
+// 지금 강제로 한 번 보내본다. 9시까지 기다리지 않고 "실제로 오는지"를 확인할 수 있어야 한다.
+async function runReminderNow() {
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  const sub = await currentPushSub();
+  if (!sub) { showToast('먼저 [설정 › 새 거래 알림]을 켜주세요'); return; }
+  try {
+    const r = await api('/settings/reminder/run', { method: 'POST' });
+    if (r.skipped) { showToast('보내지 않음: ' + r.skipped); return; }
+    const ok = (r.push && r.push.sent) || 0;
+    showToast(ok ? `📨 ${ok}대에 보냈어요 — 잠시 후 확인하세요` : '보냈지만 받은 기기가 없어요. 알림을 다시 켜보세요');
+  } catch (e) { showToast('❌ ' + e.message); }
 }
 
-function cancelAlarm() {
-  localStorage.removeItem('alarm_time');
-  localStorage.removeItem('alarm_message');
-  if (alarmInterval) { clearInterval(alarmInterval); alarmInterval = null; }
-  document.getElementById('alarm-time-display').textContent = '설정 안됨';
+async function cancelAlarm() {
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  try {
+    await api('/settings/reminder', { method: 'POST', body: { enabled: false } });
+    reminderSetting = { enabled: false };
+  } catch (e) { showToast('❌ ' + e.message); return; }
+  renderAlarmSetting();
   closeModal('alarm-modal');
   showToast('🔕 알림이 취소됐어요');
 }

@@ -166,6 +166,36 @@ async function vapidAuthHeader(env, audience) {
 // 실패해도 호출한 쪽(거래 저장 등)이 실패하면 안 된다 — 알림은 거들 뿐이다.
 // 무엇이 어떻게 됐는지 돌려준다 — 알림이 안 올 때 원인을 화면에서 바로 볼 수 있어야 한다.
 // (조용히 실패하면 "왜 안 오지?"를 영영 못 푼다. 실제로 그런 일을 한 번 겪었다.)
+// 매일 기록 알림의 실제 판단·발송. cron(scheduled)과 '지금 보내보기' 둘 다 이걸 부른다.
+// force=true면 시각·중복 검사를 건너뛴다(테스트용).
+async function runDailyReminder(env, force = false) {
+  const raw = await getSetting(env, 'reminder');
+  const r = raw ? safeParse(raw) : null;
+  if (!r || !r.enabled || !r.time) return { skipped: '알림이 꺼져 있어요' };
+
+  // 서버 시각은 UTC다. 한국 시각으로 바꿔서 비교한다(+9시간).
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const today = kst.toISOString().slice(0, 10);
+  const nowMin = kst.getUTCHours() * 60 + kst.getUTCMinutes();
+  const [th, tm] = String(r.time).split(':').map(Number);
+  const targetMin = th * 60 + tm;
+  const kstNow = `${String(kst.getUTCHours()).padStart(2, '0')}:${String(kst.getUTCMinutes()).padStart(2, '0')}`;
+
+  if (!force) {
+    if (nowMin < targetMin) return { skipped: `아직 ${r.time} 전 (지금 ${kstNow})` };
+    // 너무 늦게(2시간 넘게) 지났으면 보내지 않는다 — 자정 넘어 뜬금없이 오지 않도록.
+    if (nowMin - targetMin > 120) return { skipped: `${r.time}에서 2시간 넘게 지남 (지금 ${kstNow})` };
+    if ((await getSetting(env, 'reminder_last')) === today) return { skipped: '오늘은 이미 보냈어요' };
+  }
+  await setSetting(env, 'reminder_last', today);   // 먼저 표시해 중복 발송 방지
+  const report = await recordAndPush(env, {
+    kind: 'reminder',
+    name: r.message || '가계부 기록할 시간이에요! 💰',
+    amount: 0, category: '', user_name: '', card: '',
+  });
+  return { sentAt: kstNow, time: r.time, push: report };
+}
+
 async function sendPushToAll(env) {
   const report = { keys: false, sent: 0, results: [] };
   try {
@@ -850,6 +880,34 @@ export default {
         ).first();
         return json({ latest: row ? { ...row, kind: 'add' } : null });
       }
+      // ── 매일 기록 알림 설정 ──
+      //  서버에 둔다: 예전엔 각자 폰의 localStorage라 부부가 서로 다른 설정을 봤고,
+      //  무엇보다 앱이 꺼져 있으면 알림 자체가 안 떴다(이제 서버 cron이 보낸다).
+      if (path === '/api/settings/reminder' && request.method === 'GET') {
+        const raw = await getSetting(env, 'reminder');
+        return json({ reminder: raw ? safeParse(raw) : null });
+      }
+      if (path === '/api/settings/reminder' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        if (b?.enabled === false) {
+          await setSetting(env, 'reminder', JSON.stringify({ enabled: false }));
+          return json({ ok: true, reminder: { enabled: false } });
+        }
+        const time = String(b?.time || '');
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return json({ error: '시간 형식이 올바르지 않아요 (예: 21:00)' }, 400);
+        const message = String(b?.message || '가계부 기록할 시간이에요! 💰').slice(0, 100);
+        const reminder = { enabled: true, time, message };
+        await setSetting(env, 'reminder', JSON.stringify(reminder));
+        return json({ ok: true, reminder });
+      }
+
+      // 매일 알림을 지금 강제로 보내본다(설정 화면의 '지금 보내보기').
+      //  cron이 제대로 도는지, 문구가 맞는지 그 자리에서 확인할 수 있다.
+      if (path === '/api/settings/reminder/run' && request.method === 'POST') {
+        const force = url.searchParams.get('force') !== '0';
+        return json(await runDailyReminder(env, force));
+      }
+
       // 알림이 실제로 오는지 확인용(설정 화면의 '테스트 알림 보내기')
       if (path === '/api/push/test' && request.method === 'POST') {
         const n = await env.DB.prepare(`SELECT COUNT(*) AS n FROM push_subscriptions`).first();
@@ -1303,6 +1361,21 @@ export default {
         return json({ error: '입력한 내용을 저장할 수 없어요. 날짜와 금액을 확인해 주세요' }, 400);
       }
       return json({ error: msg }, 500);
+    }
+  },
+
+  // ───────── 매일 기록 알림 (Cron) ─────────
+  // 10분마다 깨어나 "설정한 시각이 지났고 오늘 아직 안 보냈으면" 푸시를 보낸다.
+  // 앱이 꺼져 있어도 오게 하려면 서버가 보내는 수밖에 없다(브라우저 타이머는 앱이 살아있을 때만 돈다.
+  // 게다가 iOS는 앱이 열려 있어도 new Notification()을 지원하지 않는다).
+  async scheduled(event, env, ctx) {
+    // 10분마다 깨어나 "설정한 시각이 지났고 오늘 아직 안 보냈으면" 푸시를 보낸다.
+    // 앱 안의 타이머로는 안 된다 — 앱이 꺼지면 멈추고, iOS는 new Notification()을 지원하지 않는다.
+    try {
+      const r = await runDailyReminder(env);
+      if (r && r.sentAt) console.log('매일 알림 발송:', JSON.stringify(r));
+    } catch (e) {
+      console.warn('매일 알림 실패:', String(e?.message || e));
     }
   },
 };
