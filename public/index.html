@@ -1408,7 +1408,7 @@ body {
         위 금액은 <b>참고용(지난번 금액)</b>으로 쓰여요.
       </div>
     </div>
-    <button class="btn-primary" onclick="saveRecurring()">저장</button>
+    <button class="btn-primary" id="rec-save-btn" onclick="saveRecurring()">저장</button>
     <button class="btn-secondary" onclick="closeModal('recurring-modal')">취소</button>
   </div>
 </div>
@@ -3083,7 +3083,7 @@ function renderHomePage() {
     const barCls = budAmt > 0 && budPct > 100 ? 'budget-over' : budAmt > 0 && budPct > 80 ? 'budget-warn' : '';
     return `<div class="cat-bar-item">
       <div class="cat-bar-header">
-        <div class="cat-bar-name">${emoji} ${esc(catInfo(cat).label)}</div>
+        <div class="cat-bar-name">${esc(emoji)} ${esc(catInfo(cat).label)}</div>
         <div class="cat-bar-amount">-${fmtMoney(amt)}</div>
       </div>
       <div class="cat-bar-track"><div class="cat-bar-fill ${barCls}" style="width:${pctBar}%"></div></div>
@@ -3178,7 +3178,7 @@ function renderHomeInsights(tx, expense, prev, prevExpense, catTotals) {
     const times = big.prv > 0 ? ` (${(big.cur / big.prv).toFixed(1)}배)` : '';
     changeEl.style.display = 'block';
     changeEl.innerHTML = `<div style="font-size:12px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:${up ? 'var(--expense)' : 'var(--income)'}">
-      ${up ? '▲' : '👍'} ${emoji} ${esc(catInfo(big.c).label)}가 지난달보다 <b>${fmtMoney(Math.abs(big.d))}</b>${up ? ' 늘었어요' + times : ' 줄었어요'}</div>`;
+      ${up ? '▲' : '👍'} ${esc(emoji)} ${esc(catInfo(big.c).label)}가 지난달보다 <b>${fmtMoney(Math.abs(big.d))}</b>${up ? ' 늘었어요' + times : ' 줄었어요'}</div>`;
   } else {
     changeEl.style.display = 'none';
   }
@@ -3284,7 +3284,7 @@ function renderTxItems(items) {
   return items.map(t => {
     const cat = catInfo(t.category);
     return `<div class="tx-item" data-id="${esc(t.id)}" onclick="openDetail(this.dataset.id)">
-      <div class="tx-icon">${cat.emoji}</div>
+      <div class="tx-icon">${esc(cat.emoji)}</div>
       <div class="tx-info">
         <div class="tx-name">${esc(t.name)}</div>
         <div class="tx-meta">${esc(cat.label)} ${t.user_name?'· '+esc(t.user_name):''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}${instBadge(t)}${cardBadge(t)}</div>
@@ -3364,7 +3364,7 @@ function renderBudgetPage() {
       const cat = catInfo(b.category);   // 숨긴 카테고리에 예산이 걸려 있어도 조회는 되어야 한다
       html += `<div class="card" style="margin-bottom:10px">
         <div class="card-header">
-          <div style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--text)">${cat.emoji} ${esc(cat.label)}</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--text)">${esc(cat.emoji)} ${esc(cat.label)}</div>
           <div style="font-size:11px;color:var(--${pct>100?'expense':'text3'});font-weight:${pct>100?'700':'400'}">${pct}%</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:8px">
@@ -3407,7 +3407,7 @@ function renderRecurringList() {
   list.innerHTML = recurringItems.map((r,i) => `
     <div class="settings-item" style="margin-bottom:6px">
       <div class="settings-item-left">
-        <div class="settings-item-icon">${catInfo(r.category).emoji}</div>
+        <div class="settings-item-icon">${esc(catInfo(r.category).emoji)}</div>
         <div>
           <div class="settings-item-text">${esc(r.name)}</div>
           <div class="settings-item-sub">${r.type === 'income' ? '💵 수입 · ' : ''}매월 ${r.day}일 · ${r.variable ? `금액 변동 (지난번 ${fmtMoney(r.amount)})` : fmtMoney(r.amount)}</div>
@@ -3893,7 +3893,7 @@ function openDetail(id) {
   const cat = catInfo(tx.category);
   document.getElementById('detail-content').innerHTML = `
     <div style="text-align:center;margin-bottom:20px">
-      <div style="font-size:48px;margin-bottom:8px">${cat.emoji}</div>
+      <div style="font-size:48px;margin-bottom:8px">${esc(cat.emoji)}</div>
       <div style="font-size:20px;font-weight:700;color:var(--text)">${esc(tx.name)}</div>
       <div style="font-family:var(--font-mono);font-size:28px;font-weight:700;color:var(--${tx.type==='expense'?'expense':'income'});margin:8px 0">${tx.type==='expense'?'-':'+'} ${fmtMoney(tx.amount)}</div>
       <div style="font-size:12px;color:var(--text3)">${esc(tx.date)} · ${esc(cat.label)} ${tx.user_name?'· '+esc(tx.user_name):''}</div>
@@ -4055,7 +4055,7 @@ function renderTrashList(items) {
     const when = deletedAgo(t.deleted_at);
     // id는 dataset로만 넘긴다(onclick 문자열에 넣지 않는다 — 코드 전반의 규칙).
     return `<div class="tx-item" data-id="${esc(t.id)}" style="cursor:default">
-      <div class="tx-icon">${cat.emoji}</div>
+      <div class="tx-icon">${esc(cat.emoji)}</div>
       <div class="tx-info">
         <div class="tx-name">${esc(t.name)} <span style="color:var(--text3);font-weight:400">${t.type==='expense'?'-':'+'}${fmtMoney(t.amount)}</span></div>
         <div class="tx-meta">${esc(t.date)} · ${esc(cat.label)}${when ? ' · ' + when : ''}${instBadge(t)}</div>
@@ -4200,29 +4200,34 @@ async function loadRecurring() {
   }
 }
 
+let recSaving = false;
 async function saveRecurring() {
+  if (recSaving) return;   // 이중 탭 방지 — 저장이 느릴 때 정기규칙이 두 번 등록돼 매달 2배로 꽂히던 문제
   const name = document.getElementById('rec-name').value.trim();
   const amount = amountDigits('rec-amount');
   const category = document.getElementById('rec-cat').value;
   const day = parseInt(document.getElementById('rec-day').value);
   if (!name || !amount || !day) { showToast('모두 입력해 주세요'); return; }
   if (day < 1 || day > 31) { showToast('날짜는 1~31 사이로 넣어주세요'); return; }
-
   const variable = !!document.getElementById('rec-variable')?.checked;
-  if (demoMode) {
-    recurringItems.push({ id: 'local_' + Date.now(), name, amount, category, day, variable: variable ? 1 : 0, type: recType });
-    localStorage.setItem('recurring', JSON.stringify(recurringItems));
-  } else if (authToken) {
-    try {
+
+  recSaving = true;
+  const btn = document.getElementById('rec-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '등록 중…'; }
+  try {
+    if (demoMode) {
+      recurringItems.push({ id: 'local_' + Date.now(), name, amount, category, day, variable: variable ? 1 : 0, type: recType });
+      localStorage.setItem('recurring', JSON.stringify(recurringItems));
+    } else if (authToken) {
       const r = await api('/recurring', { method: 'POST', body: { name, amount, category, day, variable, type: recType } });
       recurringItems = r.rules || [];
-    } catch(e) { showToast('❌ 저장 실패: ' + e.message); return; }
-  } else { showToast('❌ 로그인이 필요해요'); return; }
-
-  closeModal('recurring-modal');
-  renderRecurringList();
-  showToast('✅ 정기 지출 등록 완료');
-  loadData();   // 오늘이 이미 그날을 지났으면 바로 등록된다(기다리지는 않는다)
+    } else { showToast('❌ 로그인이 필요해요'); return; }
+    closeModal('recurring-modal');
+    renderRecurringList();
+    showToast('✅ 정기 지출 등록 완료');
+    loadData();   // 오늘이 이미 그날을 지났으면 바로 등록된다(기다리지는 않는다)
+  } catch(e) { showToast('❌ 저장 실패: ' + e.message); }
+  finally { recSaving = false; if (btn) { btn.disabled = false; btn.textContent = '저장'; } }
 }
 
 async function deleteRecurring(i) {
@@ -5296,7 +5301,7 @@ function openMonthlyReport() {
       const pct = expense > 0 ? Math.round((amt/expense)*100) : 0;
       const emoji = catInfo(cat).emoji;
       return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <div style="width:28px;text-align:center">${emoji}</div>
+        <div style="width:28px;text-align:center">${esc(emoji)}</div>
         <div style="flex:1">
           <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
             <span style="color:var(--text)">${esc(catInfo(cat).label)}</span>

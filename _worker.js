@@ -318,6 +318,13 @@ function cleanTx(b) {
   if (!b.category || String(b.category).length > 40) return { err: '카테고리를 확인해 주세요' };
   if (!b.name || String(b.name).length > 100) return { err: '항목명을 확인해 주세요' };
   if (!Number.isInteger(amount) || amount <= 0) return { err: '금액은 1원 이상의 정수여야 해요' };
+  // photo_url은 base64 데이터 URL이라 무제한이면 D1에 수십MB가 쌓인다. 형식·크기를 서버에서 강제한다.
+  // (키 자체가 없으면 검사하지 않는다 — 수정 시 기존 사진을 건드리지 않기 위함.)
+  if (Object.prototype.hasOwnProperty.call(b, 'photo_url') && b.photo_url != null) {
+    const pu = String(b.photo_url);
+    if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(pu)) return { err: '사진 형식을 알 수 없어요' };
+    if (pu.length > 8_000_000) return { err: '사진이 너무 커요' };
+  }
   return {
     tx: {
       date: b.date,
@@ -1414,7 +1421,7 @@ export default {
         const b = await request.json().catch(() => ({}));
         const counts = { transactions: 0, budgets: 0, recurring_rules: 0, categories: 0, skipped: 0 };
 
-        for (const t of (Array.isArray(b?.transactions) ? b.transactions : [])) {
+        for (const t of (Array.isArray(b?.transactions) ? b.transactions.slice(0, 50000) : [])) {
           const { tx, err } = cleanTx(t);
           if (err) { counts.skipped++; continue; }
           const id = (typeof t.id === 'string' && t.id) ? t.id : crypto.randomUUID();
@@ -1429,7 +1436,7 @@ export default {
             if (r.meta.changes) counts.transactions++;
           } catch (e) { counts.skipped++; }
         }
-        for (const bd of (Array.isArray(b?.budgets) ? b.budgets : [])) {
+        for (const bd of (Array.isArray(b?.budgets) ? b.budgets.slice(0, 50000) : [])) {
           try {
             const amount = Number(bd?.amount);
             if (!isMonth(bd?.month) || !Number.isInteger(amount) || amount <= 0 || !bd?.category) continue;
@@ -1439,17 +1446,21 @@ export default {
             if (r.meta.changes) counts.budgets++;
           } catch (e) {}
         }
-        for (const rl of (Array.isArray(b?.recurring_rules) ? b.recurring_rules : [])) {
+        for (const rl of (Array.isArray(b?.recurring_rules) ? b.recurring_rules.slice(0, 50000) : [])) {
           try {
             const amount = Number(rl?.amount), day = Number(rl?.day);
             if (!rl?.name || !Number.isInteger(amount) || amount <= 0 || !Number.isInteger(day) || day < 1 || day > 31) continue;
+            // ★ variable(금액변동)·type(수입/지출)을 반드시 함께 복원한다. 빠뜨리면 금액변동 규칙이
+            //   고정금액으로 매달 자동등록되고, 정기수입(급여)이 지출로 뒤집힌다(백업엔 값이 들어있다).
+            const rvar = rl?.variable ? 1 : 0;
+            const rtype = rl?.type === 'income' ? 'income' : 'expense';
             const r = await env.DB.prepare(
-              `INSERT OR IGNORE INTO recurring_rules (id, name, amount, category, day) VALUES (?1,?2,?3,?4,?5)`
-            ).bind(rl.id || crypto.randomUUID(), String(rl.name), amount, String(rl.category || '기타'), day).run();
+              `INSERT OR IGNORE INTO recurring_rules (id, name, amount, category, day, variable, type) VALUES (?1,?2,?3,?4,?5,?6,?7)`
+            ).bind(rl.id || crypto.randomUUID(), String(rl.name), amount, String(rl.category || '기타'), day, rvar, rtype).run();
             if (r.meta.changes) counts.recurring_rules++;
           } catch (e) {}
         }
-        for (const c of (Array.isArray(b?.categories) ? b.categories : [])) {
+        for (const c of (Array.isArray(b?.categories) ? b.categories.slice(0, 50000) : [])) {
           try {
             if ((c?.type !== 'income' && c?.type !== 'expense') || !c?.name || String(c.name).length > 20) continue;
             const r = await env.DB.prepare(
@@ -1484,7 +1495,10 @@ export default {
         console.warn('제약 위반:', msg);
         return json({ error: '입력한 내용을 저장할 수 없어요. 날짜와 금액을 확인해 주세요' }, 400);
       }
-      return json({ error: msg }, 500);
+      // 그 외 서버 오류의 원문(D1·SQL·런타임 세부)은 콘솔에만 남기고, 응답엔 일반 문구만 준다.
+      // 이 catch가 인증 게이트 '앞'의 공개 엔드포인트까지 감싸므로, 원문을 그대로 주면 미인증자에게 내부가 샌다.
+      console.error('서버 오류:', msg);
+      return json({ error: '일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요' }, 500);
     }
   },
 
