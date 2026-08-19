@@ -69,6 +69,7 @@ async function issueToken(user, secret) {
   const payload = b64url(enc.encode(JSON.stringify({
     u: u.id || null,
     n: String(u.name || '').slice(0, 40),
+    v: Number.isInteger(u.ver) ? u.ver : 0,   // 토큰 버전 — 비번 변경 시 올려 옛 토큰을 무효화
     exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SEC,
   })));
   return `${payload}.${await hmac(payload, secret)}`;
@@ -655,7 +656,7 @@ export default {
         const { salt, hash } = await hashPassword(password);
         const id = crypto.randomUUID();
         await env.DB.prepare(`INSERT INTO users (id, name, salt, hash) VALUES (?1, ?2, ?3, ?4)`).bind(id, name, salt, hash).run();
-        return json({ token: await issueToken({ id, name }, env.SESSION_SECRET), name });
+        return json({ token: await issueToken({ id, name, ver: 0 }, env.SESSION_SECRET), name });
       }
 
       // 로그인 — 이름 + 자기 비밀번호.
@@ -665,11 +666,11 @@ export default {
         await new Promise((r) => setTimeout(r, 400));  // 무차별 대입 속도를 떨어뜨린다(보조 수단)
         const name = String(b?.name ?? '').trim().slice(0, 40);
         const password = String(b?.password ?? '');
-        const u = name ? await env.DB.prepare(`SELECT id, name, salt, hash FROM users WHERE name = ?1`).bind(name).first() : null;
+        const u = name ? await env.DB.prepare(`SELECT id, name, salt, hash, token_ver FROM users WHERE name = ?1`).bind(name).first() : null;
         if (u) {
           const { hash } = await hashPassword(password, u.salt);
           if (safeEqual(hash, u.hash)) {
-            return json({ token: await issueToken({ id: u.id, name: u.name }, env.SESSION_SECRET), name: u.name });
+            return json({ token: await issueToken({ id: u.id, name: u.name, ver: u.token_ver }, env.SESSION_SECRET), name: u.name });
           }
         } else {
           // 이름이 없어도 해시를 한 번 계산해 응답 시간을 계정 있을 때와 맞춘다.
@@ -702,8 +703,10 @@ export default {
         // 여기선 코드로 이미 본인임을 증명했으므로 '없는 이름'을 알려줘도 된다(도움이 됨).
         if (!u) return json({ error: '그 이름의 계정이 없어요. 이름을 확인해 주세요' }, 404);
         const { salt, hash } = await hashPassword(password);
-        await env.DB.prepare(`UPDATE users SET salt = ?1, hash = ?2 WHERE id = ?3`).bind(salt, hash, u.id).run();
-        return json({ token: await issueToken({ id: u.id, name: u.name }, env.SESSION_SECRET), name: u.name });
+        // token_ver를 올려 이전에 발급된 토큰(다른 기기)을 전부 무효화한다. 이 기기엔 새 버전 토큰을 준다.
+        await env.DB.prepare(`UPDATE users SET salt = ?1, hash = ?2, token_ver = token_ver + 1 WHERE id = ?3`).bind(salt, hash, u.id).run();
+        const nv = await env.DB.prepare(`SELECT token_ver FROM users WHERE id = ?1`).bind(u.id).first();
+        return json({ token: await issueToken({ id: u.id, name: u.name, ver: nv?.token_ver ?? 0 }, env.SESSION_SECRET), name: u.name });
       }
 
       // ── 이하 전부 인증 필요 ──
@@ -715,8 +718,13 @@ export default {
       // u가 없는 건 개인 계정 이전의 옛 토큰이라 다시 로그인시킨다.
       {
         const uid = session.u;
-        const who = uid ? await env.DB.prepare(`SELECT id FROM users WHERE id = ?1`).bind(uid).first() : null;
+        const who = uid ? await env.DB.prepare(`SELECT id, token_ver FROM users WHERE id = ?1`).bind(uid).first() : null;
         if (!who) return json({ error: '다시 로그인해 주세요' }, 401);
+        // 비밀번호를 바꾸면 token_ver가 올라간다. 그 이전에 발급된 토큰(옛 v)은 여기서 끊긴다.
+        // 옛 토큰은 v가 없어 0으로 취급 — 계정 기본값도 0이라 지금 로그인된 사람은 안 끊긴다.
+        if ((session.v ?? 0) !== (who.token_ver ?? 0)) {
+          return json({ error: '비밀번호가 바뀌었어요. 다시 로그인해 주세요' }, 401);
+        }
       }
 
       if (path === '/api/me' && request.method === 'GET') {
@@ -737,8 +745,10 @@ export default {
         const cur = await hashPassword(current, u.salt);
         if (!safeEqual(cur.hash, u.hash)) return json({ error: '현재 비밀번호가 맞지 않아요' }, 401);
         const nu = await hashPassword(next);
-        await env.DB.prepare(`UPDATE users SET salt = ?1, hash = ?2 WHERE id = ?3`).bind(nu.salt, nu.hash, session.u).run();
-        return json({ ok: true });
+        // token_ver를 올려 다른 기기의 옛 토큰을 무효화하고, 이 기기엔 새 버전 토큰을 발급해 유지시킨다.
+        await env.DB.prepare(`UPDATE users SET salt = ?1, hash = ?2, token_ver = token_ver + 1 WHERE id = ?3`).bind(nu.salt, nu.hash, session.u).run();
+        const nv = await env.DB.prepare(`SELECT name, token_ver FROM users WHERE id = ?1`).bind(session.u).first();
+        return json({ ok: true, token: await issueToken({ id: session.u, name: nv?.name ?? session.n, ver: nv?.token_ver ?? 0 }, env.SESSION_SECRET) });
       }
 
       // ── 한 달치 화면에 필요한 것을 한 번에 ──

@@ -117,7 +117,9 @@ CREATE TABLE users (
   name       TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 40),
   salt       TEXT NOT NULL,
   hash       TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 토큰 무효화용 버전. 비번 변경/재설정 시 +1 → 이전에 발급된 토큰 전부 무효(다른 기기 강제 로그아웃).
+  token_ver  INTEGER NOT NULL DEFAULT 0
 );
 
 -- 웹푸시 구독. 브라우저가 만들어준 구독을 그대로 담는다(endpoint = 그 기기의 주소라 PRIMARY KEY).

@@ -4467,9 +4467,11 @@ async function changePassword() {
   const btn = document.getElementById('pass-save-btn');
   btn.disabled = true; btn.textContent = '변경 중…';
   try {
-    await api('/password', { method: 'POST', body: { current: cur, next: nw } });
+    const r = await api('/password', { method: 'POST', body: { current: cur, next: nw } });
+    // 비번을 바꾸면 옛 토큰이 무효화된다 — 이 기기는 서버가 준 새 토큰으로 갈아끼워야 안 끊긴다.
+    if (r?.token) { authToken = r.token; localStorage.setItem('auth_token', r.token); }
     closeModal('pass-modal');
-    showToast('✅ 비밀번호를 바꿨어요');
+    showToast('✅ 비밀번호를 바꿨어요 (다른 기기는 다시 로그인해야 해요)');
   } catch(e) {
     showToast('❌ ' + e.message);
   } finally {
