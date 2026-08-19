@@ -1755,7 +1755,7 @@ async function api(path, { method = 'GET', body } = {}) {
   let data = null;
   try { data = await res.json(); } catch(e) {}
   // 토큰 만료/무효는 로그인으로 되돌린다. (로그인·가입·재설정 요청의 401은 '비번/코드 틀림'이므로 제외)
-  if (res.status === 401 && path !== '/login' && path !== '/signup' && path !== '/reset-password') {
+  if (res.status === 401 && path !== '/login' && path !== '/signup' && path !== '/reset-password' && path !== '/password') {
     authToken = null;
     localStorage.removeItem('auth_token');
     // 여기서 화면도 로그인으로 돌려줘야 한다. 안 그러면 저장/삭제 중 토큰이 만료된 경우
@@ -1799,6 +1799,7 @@ function submitAuth() {
 function afterAuth(r) {
   authToken = r.token;
   localStorage.setItem('auth_token', r.token);
+  stashTokenForSW();   // 새 토큰을 SW 푸시 캐시에도 즉시 반영(재설정 등으로 토큰이 바뀐 경우 알림 문구 유지)
   if (r.name) localStorage.setItem('userName', r.name);   // 이름의 정본은 서버가 돌려준 계정 이름
   demoMode = false;
   localStorage.setItem('demoMode', 'false');
@@ -4469,7 +4470,7 @@ async function changePassword() {
   try {
     const r = await api('/password', { method: 'POST', body: { current: cur, next: nw } });
     // 비번을 바꾸면 옛 토큰이 무효화된다 — 이 기기는 서버가 준 새 토큰으로 갈아끼워야 안 끊긴다.
-    if (r?.token) { authToken = r.token; localStorage.setItem('auth_token', r.token); }
+    if (r?.token) { authToken = r.token; localStorage.setItem('auth_token', r.token); await stashTokenForSW(); }  // SW 푸시 토큰 캐시도 갱신(안 하면 알림 문구가 일반문구로)
     closeModal('pass-modal');
     showToast('✅ 비밀번호를 바꿨어요 (다른 기기는 다시 로그인해야 해요)');
   } catch(e) {
