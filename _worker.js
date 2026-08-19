@@ -594,6 +594,80 @@ function appVersion(env) {
   return String(env?.CF_VERSION_METADATA?.id || 'dev');
 }
 
+// ───────── 월 1회 전체 백업 이메일 ─────────
+// 워커는 자체로 메일을 못 보내므로 Resend API(무료)로 보낸다. RESEND_API_KEY(Worker secret)가 없으면 조용히 건너뛴다.
+// 백업은 사진(base64)까지 담아 커질 수 있어, 너무 크면 사진을 빼고 보낸다(이메일 첨부 한도 초과 방지).
+const BACKUP_EMAIL_TO = 'dooho0812@gmail.com';
+
+// 큰 UTF-8 문자열도 안전하게 base64로(첨부용). 스프레드는 큰 배열에서 스택이 터지므로 청크로 처리.
+function toBase64Utf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return btoa(bin);
+}
+
+async function buildBackupObject(env) {
+  const tx = await env.DB.prepare(
+    `SELECT id, created_at, date, type, category, name, amount, memo, photo_url, is_recurring, user_name,
+            card, installment_id, installment_seq, installment_months
+     FROM transactions WHERE deleted_at IS NULL ORDER BY date`
+  ).all();
+  const bud = await env.DB.prepare(`SELECT id, month, category, amount FROM budgets`).all();
+  const rec = await env.DB.prepare(`SELECT id, name, amount, category, day, variable, type FROM recurring_rules`).all();
+  const cat = await env.DB.prepare(`SELECT id, type, name, emoji, sort FROM categories`).all();
+  return {
+    version: 1,
+    exported_at: new Date().toISOString(),
+    transactions: tx.results ?? [],
+    budgets: bud.results ?? [],
+    recurring_rules: rec.results ?? [],
+    categories: cat.results ?? [],
+    category_overrides: safeParse(await getSetting(env, 'category_overrides')),
+    card_settings: safeParse(await getSetting(env, 'card_settings')),
+    reminder: safeParse(await getSetting(env, 'reminder')),
+    total_budget: safeParse(await getSetting(env, 'total_budget')),
+  };
+}
+
+async function sendBackupEmail(env) {
+  if (!env.RESEND_API_KEY) return { skipped: 'RESEND_API_KEY 없음(설정하면 켜짐)' };
+  const backup = await buildBackupObject(env);
+  let text = JSON.stringify(backup);
+  let note = '';
+  if (text.length > 18_000_000) {   // 사진이 많아 너무 크면 사진만 빼고 보낸다
+    const light = { ...backup, transactions: (backup.transactions || []).map(t => ({ ...t, photo_url: t.photo_url ? '(사진 생략)' : null })) };
+    text = JSON.stringify(light);
+    note = ' (사진은 용량 때문에 제외했어요 — 사진까지 필요하면 앱에서 직접 백업받으세요)';
+  }
+  const today = backup.exported_at.slice(0, 10);
+  const txCount = (backup.transactions || []).length;
+  const payload = {
+    from: '우리집 가계부 <onboarding@resend.dev>',
+    to: [BACKUP_EMAIL_TO],
+    subject: `[우리집 가계부] ${today} 백업 (거래 ${txCount}건)`,
+    text: `우리집 가계부 자동 백업입니다.${note}\n\n첨부한 JSON 파일을 앱의 설정 › 백업 복원에서 불러오면 그대로 복구됩니다.\n거래 ${txCount}건 · 만든 시각 ${backup.exported_at}`,
+    attachments: [{ filename: `가계부_백업_${today}.json`, content: toBase64Utf8(text) }],
+  };
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  let detail = ''; try { detail = (await res.text()).slice(0, 300); } catch (e) {}
+  return { ok: res.ok, status: res.status, detail, txCount };
+}
+
+// 한 달에 한 번만. app_settings에 마지막 보낸 달(YYYY-MM)을 기록해 중복 발송을 막는다.
+async function runMonthlyBackupEmail(env) {
+  const ym = new Date().toISOString().slice(0, 7);
+  if ((await getSetting(env, 'last_backup_email_ym')) === ym) return { skipped: '이번 달 이미 보냄' };
+  const r = await sendBackupEmail(env);
+  if (r?.ok) await setSetting(env, 'last_backup_email_ym', ym);
+  return { ym, ...r };
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -1424,6 +1498,14 @@ export default {
         });
       }
 
+      // ── 백업 이메일 지금 보내기(테스트/수동) ── 월초를 안 기다리고 즉시 보낸다.
+      if (path === '/api/backup/email' && request.method === 'POST') {
+        const r = await sendBackupEmail(env);
+        if (r?.skipped) return json({ ok: false, error: '메일 설정이 안 됐어요 (RESEND_API_KEY 필요)', detail: r.skipped }, 400);
+        if (!r?.ok) return json({ ok: false, error: '메일 발송 실패', status: r?.status, detail: r?.detail }, 502);
+        return json({ ok: true, sentTo: BACKUP_EMAIL_TO, txCount: r.txCount });
+      }
+
       // ── 백업 복원 ──
       //  같은 id는 INSERT OR IGNORE로 건너뛴다 — 같은 파일을 두 번 넣어도 중복이 안 생긴다(추가만, 삭제 없음).
       //  형식이 어긋난 거래는 cleanTx로 걸러 조용히 건너뛴다(전체가 실패하지 않도록).
@@ -1520,12 +1602,18 @@ export default {
     // 10분마다 깨어나 "설정한 시각이 지났고 오늘 아직 안 보냈으면" 푸시를 보낸다.
     // 앱 안의 타이머로는 안 된다 — 앱이 꺼지면 멈추고, iOS는 new Notification()을 지원하지 않는다.
     try {
+      // 매월 1일(0 0 1 * *, =KST 09:00)엔 전체 백업을 이메일로 보낸다. 10분 트리거와 구분.
+      if (event?.cron === '0 0 1 * *') {
+        const mb = await runMonthlyBackupEmail(env);
+        console.log('월간 백업 메일:', JSON.stringify(mb));
+        return;
+      }
       const r = await runDailyReminder(env);
       if (r && r.sentAt) console.log('매일 알림 발송:', JSON.stringify(r));
       const v = await runVariableRecurringAlerts(env);
       if (v && v.sent.length) console.log('금액 입력 알림:', JSON.stringify(v));
     } catch (e) {
-      console.warn('매일 알림 실패:', String(e?.message || e));
+      console.warn('스케줄 작업 실패:', String(e?.message || e));
     }
   },
 };
