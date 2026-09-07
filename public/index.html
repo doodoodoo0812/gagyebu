@@ -3911,6 +3911,17 @@ function openDetail(id) {
   if (hasPhoto(tx)) loadDetailPhoto(tx);
 }
 
+// 이 할부가 몇 월에 시작해서 몇 월에 끝나는지 — 이 달 날짜와 회차로 역산한다.
+// (앱이 13개월치만 들고 있어 그룹의 첫/마지막 회차가 안 실려 있어도 정확하다)
+function instRange(t) {
+  const p = String(t.date || "").split("-").map(Number);
+  if (!p[0] || !p[1] || !t.installment_seq || !t.installment_months) return null;
+  const startIdx = (p[0] * 12 + (p[1] - 1)) - (t.installment_seq - 1);
+  const endIdx = startIdx + (t.installment_months - 1);
+  const fmt = (i) => Math.floor(i / 12) + "년 " + ((i % 12) + 1) + "월";
+  return { start: fmt(startIdx), end: fmt(endIdx) };
+}
+
 // 상세 화면의 할부 요약 카드 — "몇 번째 회차인지, 얼마나 남았는지"를 그 자리에서 알려준다.
 function instCard(t) {
   if (!isInstallment(t)) return '';
@@ -3921,9 +3932,11 @@ function instCard(t) {
   const remainCount = Math.max(0, t.installment_months - t.installment_seq);
   // 첫 회차만 나머지를 흡수하므로 2회차 이후는 금액이 모두 같다. 그 균등액으로 남은 금액을 센다.
   const evenAmt = group.find(x => x.installment_seq >= 2)?.amount ?? t.amount;
+  const rng = instRange(t);
   return `<div class="card" style="margin-bottom:12px">
     <div style="font-size:12px;color:var(--text2);line-height:1.7">
       💳 무이자 <b>${t.installment_months}개월</b> 할부 중 <b>${t.installment_seq}번째</b>${t.card ? ` · ${esc(t.card)}` : ''}<br>
+      ${rng ? `📅 <b>${rng.start}</b> 시작 → <b>${rng.end}</b> 마지막 회차<br>` : ``}
       ${complete ? `총액 <b>${fmtMoney(total)}</b> · ` : ''}이 달 <b>${fmtMoney(t.amount)}</b><br>
       ${remainCount > 0
         ? `<span style="color:var(--expense)">앞으로 ${remainCount}번 더 · 약 ${fmtMoney(remainCount * evenAmt)} 남음</span>`
