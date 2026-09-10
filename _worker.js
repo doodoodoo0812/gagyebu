@@ -660,12 +660,47 @@ async function sendBackupEmail(env) {
 }
 
 // 한 달에 한 번만. app_settings에 마지막 보낸 달(YYYY-MM)을 기록해 중복 발송을 막는다.
-async function runMonthlyBackupEmail(env) {
-  const ym = new Date().toISOString().slice(0, 7);
-  if ((await getSetting(env, 'last_backup_email_ym')) === ym) return { skipped: '이번 달 이미 보냄' };
+// 백업 메일 발송 주기. 앱 설정에서 바꾸며, 한 번도 안 건드렸으면 이 값이 쓰인다.
+// weekday: 0=일 … 6=토.  day: 매월 N일(그 달에 없는 날이면 말일).
+const BACKUP_EMAIL_DEFAULT = { enabled: true, freq: 'weekly', weekday: 0, day: 1, time: '21:00' };
+
+function backupEmailConfig(raw) {
+  const s = raw ? safeParse(raw) : null;
+  return { ...BACKUP_EMAIL_DEFAULT, ...(s && typeof s === 'object' ? s : {}) };
+}
+
+// 매일 기록 알림과 같은 방식이다 — 10분마다 깨어나 '오늘이 보내는 날이고, 시각이 지났고,
+// 아직 안 보냈으면' 보낸다. 월 1회 전용 cron을 따로 두면 주기를 바꿀 수 없어 이렇게 합쳤다.
+async function runScheduledBackupEmail(env, force = false) {
+  const cfg = backupEmailConfig(await getSetting(env, 'backup_email'));
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);   // 서버는 UTC — 한국 시각으로 비교
+  const today = kst.toISOString().slice(0, 10);
+  const nowMin = kst.getUTCHours() * 60 + kst.getUTCMinutes();
+  const kstNow = `${String(kst.getUTCHours()).padStart(2, '0')}:${String(kst.getUTCMinutes()).padStart(2, '0')}`;
+  const [th, tm] = String(cfg.time || '21:00').split(':').map(Number);
+  const targetMin = th * 60 + tm;
+
+  if (!force) {
+    if (!cfg.enabled) return { skipped: '백업 메일이 꺼져 있어요' };
+    if (cfg.freq === 'weekly') {
+      if (kst.getUTCDay() !== Number(cfg.weekday)) return { skipped: '오늘은 보내는 요일이 아니에요' };
+    } else {
+      // 31일로 잡아둔 달에 31일이 없으면 영영 안 보내게 된다 — 그런 달은 말일에 보낸다.
+      const lastDay = new Date(Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth() + 1, 0)).getUTCDate();
+      if (kst.getUTCDate() !== Math.min(Number(cfg.day) || 1, lastDay)) return { skipped: '오늘은 보내는 날이 아니에요' };
+    }
+    if (nowMin < targetMin) return { skipped: `아직 ${cfg.time} 전 (지금 ${kstNow})` };
+    if (nowMin - targetMin > 120) return { skipped: `${cfg.time}에서 2시간 넘게 지남 (지금 ${kstNow})` };
+    if ((await getSetting(env, 'backup_email_last')) === today) return { skipped: '오늘은 이미 보냈어요' };
+    // 먼저 표시해 10분 뒤 tick이 같은 메일을 또 보내는 걸 막는다.
+    await setSetting(env, 'backup_email_last', today);
+  }
+
   const r = await sendBackupEmail(env);
-  if (r?.ok) await setSetting(env, 'last_backup_email_ym', ym);
-  return { ym, ...r };
+  // 실패했으면 표시를 지운다. 안 그러면 오늘은 다시 시도조차 못 하고 그 주 백업이 통째로 빈다.
+  if (!force && !r?.ok) await setSetting(env, 'backup_email_last', '');
+  // 테스트 발송(force)은 표시를 남기지 않는다 — 남기면 그날 진짜 발송이 '이미 보냈다'며 안 나간다.
+  return { sentAt: kstNow, cfg, ...r };
 }
 
 export default {
@@ -1498,7 +1533,36 @@ export default {
         });
       }
 
-      // ── 백업 이메일 지금 보내기(테스트/수동) ── 월초를 안 기다리고 즉시 보낸다.
+      // ── 백업 메일 주기 설정 ── (매주 일요일 21:00이 기본)
+      if (path === '/api/settings/backup-email' && request.method === 'GET') {
+        return json({ backupEmail: backupEmailConfig(await getSetting(env, 'backup_email')), sentTo: BACKUP_EMAIL_TO });
+      }
+      if (path === '/api/settings/backup-email' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        if (b?.enabled === false) {
+          const off = { ...backupEmailConfig(await getSetting(env, 'backup_email')), enabled: false };
+          await setSetting(env, 'backup_email', JSON.stringify(off));
+          return json({ ok: true, backupEmail: off });
+        }
+        const time = String(b?.time || '');
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return json({ error: '시간 형식이 올바르지 않아요 (예: 21:00)' }, 400);
+        const freq = b?.freq === 'monthly' ? 'monthly' : 'weekly';
+        const weekday = Number(b?.weekday);
+        const day = Number(b?.day);
+        if (freq === 'weekly' && !(weekday >= 0 && weekday <= 6)) return json({ error: '요일을 골라주세요' }, 400);
+        if (freq === 'monthly' && !(day >= 1 && day <= 31)) return json({ error: '날짜는 1~31 사이여야 해요' }, 400);
+        const backupEmail = {
+          enabled: true, freq, time,
+          weekday: freq === 'weekly' ? weekday : BACKUP_EMAIL_DEFAULT.weekday,
+          day: freq === 'monthly' ? day : BACKUP_EMAIL_DEFAULT.day,
+        };
+        await setSetting(env, 'backup_email', JSON.stringify(backupEmail));
+        // 주기를 바꿨으면 '오늘 이미 보냄' 표시는 지운다 — 안 그러면 오늘로 당겨도 안 나간다.
+        await setSetting(env, 'backup_email_last', '');
+        return json({ ok: true, backupEmail });
+      }
+
+      // ── 백업 이메일 지금 보내기(테스트/수동) ── 정해둔 날을 안 기다리고 즉시 보낸다.
       if (path === '/api/backup/email' && request.method === 'POST') {
         const r = await sendBackupEmail(env);
         if (r?.skipped) return json({ ok: false, error: '메일 설정이 안 됐어요 (RESEND_API_KEY 필요)', detail: r.skipped }, 400);
@@ -1602,12 +1666,10 @@ export default {
     // 10분마다 깨어나 "설정한 시각이 지났고 오늘 아직 안 보냈으면" 푸시를 보낸다.
     // 앱 안의 타이머로는 안 된다 — 앱이 꺼지면 멈추고, iOS는 new Notification()을 지원하지 않는다.
     try {
-      // 매월 1일(0 0 1 * *, =KST 09:00)엔 전체 백업을 이메일로 보낸다. 10분 트리거와 구분.
-      if (event?.cron === '0 0 1 * *') {
-        const mb = await runMonthlyBackupEmail(env);
-        console.log('월간 백업 메일:', JSON.stringify(mb));
-        return;
-      }
+      // 백업 메일도 같은 10분 tick에서 본다. 주기·시각을 앱에서 바꿀 수 있어야 해서
+      // 전용 cron(예전 '0 0 1 * *')으로는 안 된다 — cron은 배포해야만 바뀐다.
+      const mb = await runScheduledBackupEmail(env);
+      if (mb && mb.status) console.log('백업 메일:', JSON.stringify(mb));
       const r = await runDailyReminder(env);
       if (r && r.sentAt) console.log('매일 알림 발송:', JSON.stringify(r));
       const v = await runVariableRecurringAlerts(env);

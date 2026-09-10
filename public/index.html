@@ -1084,6 +1084,16 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
+      <div class="settings-item" onclick="openBackupEmailModal()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">📧</div>
+          <div>
+            <div class="settings-item-text">백업 메일 자동 발송</div>
+            <div class="settings-item-sub" id="backup-email-display">매주 일요일 21:00</div>
+          </div>
+        </div>
+        <div class="settings-item-right">›</div>
+      </div>
       <div class="settings-item" onclick="triggerImportBackup()">
         <div class="settings-item-left">
           <div class="settings-item-icon">♻️</div>
@@ -1445,6 +1455,43 @@ body {
     <button class="btn-secondary" onclick="runReminderNow()" style="margin-top:8px">📨 지금 보내보기 (확인용)</button>
     <button class="btn-secondary" onclick="cancelAlarm()" style="margin-top:8px;color:var(--expense)">알림 취소</button>
     <button class="btn-secondary" onclick="closeModal('alarm-modal')" style="margin-top:6px">닫기</button>
+  </div>
+</div>
+
+<!-- BACKUP EMAIL MODAL -->
+<div class="modal-backdrop" id="backup-email-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">📧 백업 메일 자동 발송</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6">
+      정해둔 때마다 거래·예산·카테고리를 담은 백업 파일이 메일로 옵니다.<br>
+      받는 곳: <b id="backup-email-to">…</b>
+    </div>
+    <div class="form-group">
+      <label class="form-label">주기</label>
+      <select class="form-select" id="backup-email-freq" onchange="renderBackupEmailFields()">
+        <option value="weekly">매주</option>
+        <option value="monthly">매월</option>
+      </select>
+    </div>
+    <div class="form-group" id="backup-email-weekday-row">
+      <label class="form-label">요일</label>
+      <select class="form-select" id="backup-email-weekday"></select>
+    </div>
+    <div class="form-group" id="backup-email-day-row">
+      <label class="form-label">날짜</label>
+      <select class="form-select" id="backup-email-day"></select>
+      <div style="font-size:12px;color:var(--text3);margin-top:6px">그 달에 없는 날짜(31일 등)면 말일에 보내요.</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">시간</label>
+      <input class="form-input" id="backup-email-time" type="time" value="21:00">
+    </div>
+    <div id="backup-email-state" style="font-size:12px;margin-bottom:10px;line-height:1.5"></div>
+    <button class="btn-primary" onclick="saveBackupEmail()">저장</button>
+    <button class="btn-secondary" onclick="sendBackupEmailNow()" style="margin-top:8px">📨 지금 한 통 받아보기</button>
+    <button class="btn-secondary" onclick="cancelBackupEmail()" style="margin-top:8px;color:var(--expense)">자동 발송 끄기</button>
+    <button class="btn-secondary" onclick="closeModal('backup-email-modal')" style="margin-top:6px">닫기</button>
   </div>
 </div>
 
@@ -1879,6 +1926,7 @@ function showApp() {
     document.getElementById('app').style.display = 'flex';
     initModalBackdrops();
     loadAlarmSettings();
+    loadBackupEmailSetting();
     renderCategoryGrid('expense');
     renderCategoryGrids();
     updateMonthLabel();
@@ -4384,6 +4432,120 @@ async function exportBackup() {
   showToast(`💾 백업 완료 (거래 ${(data.transactions || []).length}건)`);
   // 언제 백업했는지 남겨야 "백업한 지 N일 됐어요"를 알려줄 수 있다.
   try { if (!demoMode && authToken) { await api('/settings/backup-mark', { method: 'POST' }); lastBackupDate = todayLocal(); } } catch (e) {}
+}
+
+// ===== 백업 메일 자동 발송 =====
+// 백업은 사진까지 지키는 유일한 경로인데, 사람은 잊는다. 정해둔 때에 서버가 알아서 보낸다.
+// 주기·시각을 cron에 박지 않고 서버 설정에 두는 이유: cron은 배포해야만 바뀌기 때문이다.
+const WEEKDAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
+let backupEmailSetting = null;
+let backupEmailTo = '';
+
+async function loadBackupEmailSetting() {
+  try {
+    if (demoMode || !authToken) return;
+    const r = await api('/settings/backup-email');
+    backupEmailSetting = r.backupEmail;
+    backupEmailTo = r.sentTo || '';
+  } catch (e) { /* 실패해도 앱은 정상 동작 */ }
+  renderBackupEmailSetting();
+}
+
+function backupEmailSummary(s) {
+  if (!s) return '불러오는 중…';
+  if (!s.enabled) return '꺼짐 — 눌러서 켜기';
+  const when = s.freq === 'monthly'
+    ? `매월 ${s.day}일`
+    : `매주 ${WEEKDAY_NAMES[Number(s.weekday)] || '일'}요일`;
+  return `${when} ${s.time}`;
+}
+
+function renderBackupEmailSetting() {
+  const disp = document.getElementById('backup-email-display');
+  if (disp) disp.textContent = backupEmailSummary(backupEmailSetting);
+}
+
+// 주기가 '매주'면 날짜 칸이, '매월'이면 요일 칸이 의미가 없다. 쓸 것만 보여준다.
+function renderBackupEmailFields() {
+  const weekly = document.getElementById('backup-email-freq').value !== 'monthly';
+  document.getElementById('backup-email-weekday-row').style.display = weekly ? '' : 'none';
+  document.getElementById('backup-email-day-row').style.display = weekly ? 'none' : '';
+}
+
+function openBackupEmailModal() {
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  const wd = document.getElementById('backup-email-weekday');
+  if (wd && !wd.options.length) {
+    wd.innerHTML = WEEKDAY_NAMES.map((n, i) => `<option value="${i}">${n}요일</option>`).join('');
+  }
+  const dy = document.getElementById('backup-email-day');
+  if (dy && !dy.options.length) {
+    dy.innerHTML = Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}">${i + 1}일</option>`).join('');
+  }
+  const s = backupEmailSetting || { enabled: true, freq: 'weekly', weekday: 0, day: 1, time: '21:00' };
+  document.getElementById('backup-email-freq').value = s.freq === 'monthly' ? 'monthly' : 'weekly';
+  wd.value = String(Number(s.weekday) || 0);
+  dy.value = String(Number(s.day) || 1);
+  document.getElementById('backup-email-time').value = s.time || '21:00';
+  document.getElementById('backup-email-to').textContent = backupEmailTo || '(불러오는 중)';
+  const state = document.getElementById('backup-email-state');
+  if (state) {
+    state.innerHTML = (s && s.enabled)
+      ? `<span style="color:var(--income)">✅ 켜져 있어요 — ${backupEmailSummary(s)}에 보냅니다</span>`
+      : '<span style="color:var(--text3)">지금은 꺼져 있어요. [저장]을 누르면 켜집니다.</span>';
+  }
+  renderBackupEmailFields();
+  openModal('backup-email-modal');
+}
+
+async function saveBackupEmail() {
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  const freq = document.getElementById('backup-email-freq').value;
+  const time = document.getElementById('backup-email-time').value;
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) { showToast('시간을 확인해 주세요'); return; }
+  const body = {
+    enabled: true, freq, time,
+    weekday: Number(document.getElementById('backup-email-weekday').value),
+    day: Number(document.getElementById('backup-email-day').value),
+  };
+  try {
+    const r = await api('/settings/backup-email', { method: 'POST', body });
+    backupEmailSetting = r.backupEmail;
+  } catch (e) { showToast('❌ 저장 실패: ' + e.message); return; }
+  renderBackupEmailSetting();
+  closeModal('backup-email-modal');
+  showToast(`✅ ${backupEmailSummary(backupEmailSetting)}에 백업 메일이 갑니다`);
+}
+
+async function cancelBackupEmail() {
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  if (!confirm('백업 메일 자동 발송을 끌까요?\n백업은 설정에서 직접 받으셔야 합니다.')) return;
+  try {
+    const r = await api('/settings/backup-email', { method: 'POST', body: { enabled: false } });
+    backupEmailSetting = r.backupEmail;
+  } catch (e) { showToast('❌ 저장 실패: ' + e.message); return; }
+  renderBackupEmailSetting();
+  closeModal('backup-email-modal');
+  showToast('자동 발송을 껐어요');
+}
+
+// 정해둔 날을 안 기다리고 지금 한 통 보내본다. 메일이 실제로 도착하는지 그 자리에서 확인할 수 있다.
+// 서버가 백업을 만들어 보내는 데 몇 초 걸린다 — 그 사이 또 누르면 같은 메일이 두 통 가므로 잠근다.
+let backupEmailSending = false;
+async function sendBackupEmailNow() {
+  if (backupEmailSending) return;
+  if (demoMode || !authToken) { showToast('로그인이 필요해요'); return; }
+  if (!confirm('지금 백업 파일을 메일로 보낼까요?')) return;
+  backupEmailSending = true;
+  showToast('⏳ 메일을 보내는 중… (몇 초 걸려요)');
+  try {
+    const r = await api('/backup/email', { method: 'POST' });
+    showToast(`📧 ${r.sentTo}(으)로 보냈어요 · 거래 ${r.txCount}건`);
+  } catch (e) {
+    showToast('❌ ' + e.message);
+  } finally {
+    backupEmailSending = false;
+  }
 }
 
 function triggerImportBackup() { document.getElementById('backup-file-input').click(); }
