@@ -1227,11 +1227,12 @@ body {
     <!-- 🏢 사무실 지출 (2026-09-13) — 여기서 찍으면 동래연제앱 지출에도 자동으로 들어간다.
          집 살림 합계·예산·리포트에서는 빠지고, 카드 청구액에는 그대로 들어간다(실제로 통장에서 나가니까). -->
     <div class="form-group" id="office-group">
-      <label class="form-label">어디 쓴 돈인가요?</label>
+      <label class="form-label">어디 쓴 돈인가요? <span style="color:var(--expense);font-weight:700">*</span></label>
       <div style="display:flex;gap:8px">
         <button type="button" class="type-btn" id="office-btn-home" onclick="setOffice('')">🏠 우리집</button>
         <button type="button" class="type-btn" id="office-btn-artclass" onclick="setOffice('artclass')">🏢 사무실 경비</button>
       </div>
+      <div id="office-pick-hint" style="font-size:12px;color:var(--text3);margin-top:6px">둘 중 하나를 골라주세요</div>
       <div id="office-cat-wrap" style="display:none;margin-top:8px">
         <select class="form-select" id="tx-office-cat"></select>
         <div style="font-size:12px;color:var(--text3);margin-top:6px;line-height:1.5">
@@ -3723,7 +3724,10 @@ try{
   const _c = localStorage.getItem('gy_office_cats');
   if(_c){ const _p = JSON.parse(_c); if(_p && Object.keys(_p).length) OFFICE_CATS = _p; }
 }catch(e){}
-let currentOffice = '';                      // '' = 우리집, 'artclass' = 동래연제
+/* 🏢 (2026-09-13 실장님 "필수로 선택하게 해줘") 세 가지 상태다 —
+   null = 아직 안 고름(저장 못 함) · '' = 우리집 · 'artclass' = 사무실 경비.
+   예전엔 기본이 우리집이라, 사무실 것을 넣으면서 안 누르면 그대로 집 살림으로 들어갔다. */
+let currentOffice = null;
 const OFFICE_LAST_KEY = 'gy_office_last';    // 마지막에 고른 분류를 기억 — 대개는 저장만 누르면 되게
 
 function renderOfficeCats(pick){
@@ -3741,21 +3745,30 @@ function renderOfficeCats(pick){
 }
 
 function setOffice(dest){
-  currentOffice = dest || '';
-  if(currentOffice) loadOfficeCats().then(function(){ if(currentOffice) renderOfficeCats(); });   // 🏷 저쪽 목록으로 갱신
-  const on = !!currentOffice;
+  currentOffice = (dest === null || dest === undefined) ? null : (dest || '');
+  const picked = (currentOffice !== null);
+  const isOf = (currentOffice === 'artclass');
+  if(isOf) loadOfficeCats().then(function(){ if(currentOffice === 'artclass') renderOfficeCats(); });   // 🏷 저쪽 목록으로 갱신
   const bh = document.getElementById('office-btn-home'), ba = document.getElementById('office-btn-artclass');
-  if(bh) bh.className = 'type-btn' + (on ? '' : ' active-income');
-  if(ba) ba.className = 'type-btn' + (on ? ' active-expense' : '');
+  if(bh) bh.className = 'type-btn' + (picked && !isOf ? ' active-income' : '');
+  if(ba) ba.className = 'type-btn' + (isOf ? ' active-expense' : '');
   const wrap = document.getElementById('office-cat-wrap');
-  if(wrap) wrap.style.display = on ? 'block' : 'none';
-  if(on) renderOfficeCats();
+  if(wrap) wrap.style.display = isOf ? 'block' : 'none';
+  const hint = document.getElementById('office-pick-hint');
+  if(hint) hint.style.display = picked ? 'none' : 'block';
+  if(isOf) renderOfficeCats();
 }
 // 모달을 열 때마다 부른다 — 수정이면 그 거래의 값, 새로 넣는 거면 우리집.
 function initOffice(tx){
-  const dest = (tx && tx.office_dest) ? String(tx.office_dest) : '';
-  setOffice(dest);
-  if(dest) renderOfficeCats((tx && tx.office_cat) || null);
+  /* 수정이면 이미 한 번 정해진 것이므로 그 값을 그대로(옛 거래는 사무실 표시가 없으니 우리집).
+     새로 넣을 때는 **아무것도 안 고른 상태**로 둔다 — 저장 때 반드시 고르게 하려고. */
+  if(tx){
+    const dest = tx.office_dest ? String(tx.office_dest) : '';
+    setOffice(dest);
+    if(dest) renderOfficeCats(tx.office_cat || null);
+  } else {
+    setOffice(null);
+  }
 }
 /* 설정 화면을 열 때·저장 뒤에 부른다. 0 이면 줄 자체를 숨긴다 — 평소엔 보일 일이 없어야 한다. */
 async function refreshOfficePending(){
@@ -3781,7 +3794,7 @@ async function officeRetryNow(){
 }
 
 function officeFields(){
-  if(!currentOffice || currentTxType !== 'expense') return { office_dest:null, office_cat:null };
+  if(currentOffice !== 'artclass' || currentTxType !== 'expense') return { office_dest:null, office_cat:null };
   const sel = document.getElementById('tx-office-cat');
   const cat = (sel && sel.value) || '운영비|기타 운영비';
   try{ localStorage.setItem(OFFICE_LAST_KEY, cat); }catch(e){}
@@ -3802,7 +3815,7 @@ function setType(type) {
   const og = document.getElementById('office-group');
   if (og) {
     og.style.display = (type === 'expense') ? 'block' : 'none';
-    if (type !== 'expense') setOffice('');
+    if (type !== 'expense') setOffice(null);   // 수입으로 갔다가 돌아오면 다시 '안 고른' 상태로
   }
   renderCategoryGrid(type);
 }
@@ -3923,6 +3936,19 @@ async function saveTransactionInner() {
 ${dup.date} · ${dup.name} · ${fmtMoney(dup.amount)}
 
 그래도 하나 더 저장할까요?`)) return;
+  }
+  /* 🏢 (2026-09-13) 지출은 **우리집인지 사무실 경비인지 반드시 고른 뒤** 저장한다.
+     안 고르고 넘어가면 사무실 쓴 돈이 집 살림에 섞여 들어가고, 나중에 찾아 고치기 어렵다. */
+  if (currentTxType === 'expense' && currentOffice === null) {
+    showToast('🏠 우리집인지 🏢 사무실 경비인지 골라주세요');
+    try{
+      const og = document.getElementById('office-group');
+      if(og){ og.scrollIntoView({ block:'center', behavior:'smooth' });
+        og.style.transition = 'background .3s'; og.style.background = 'rgba(239,68,68,.12)';
+        setTimeout(function(){ og.style.background = ''; }, 1200);
+      }
+    }catch(e){}
+    return;
   }
   const months = parseInt(document.getElementById('tx-installment').value, 10) || 1;
 
