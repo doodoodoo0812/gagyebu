@@ -239,6 +239,114 @@ async function runDailyReminder(env, force = false) {
 // 푸시는 사용자를 기다리게 하지 않는다. 응답을 먼저 보내고 백그라운드로 보낸다.
 // (거래 저장에서 애플·구글 서버 왕복을 기다리면 저장이 느려져, 사용자가 저장 버튼을 여러 번 눌러
 //  같은 거래가 두세 번 등록되는 일이 실제로 있었다)
+/* ══════ 🏢 사무실 지출 — 동래연제앱으로 보내기 (2026-09-13) ══════
+   작업서: 0.app/_문서/가계부_사무실지출_연동_작업서.md
+   · 저장과 전송을 한 덩어리로 묶지 않는다 — 저쪽이 느리거나 죽어 있어도 **가계부 저장은 무조건 성공**해야 한다.
+   · 실패는 office_sync 에 남기고 10분 크론이 다시 보낸다. 재시도가 중복을 만들지 않는 건 저쪽이 txId 로 멱등 처리한다.
+   · 정본은 가계부다. 저쪽에서 고친 값은 다음 전송 때 덮인다. */
+function officeReady(env){ return !!(env.ARTCLASS_KEY && (env.ARTCLASS || env.ARTCLASS_URL)); }
+/* 저쪽 창구를 부른다. **서비스 바인딩(env.ARTCLASS)이 있으면 그것부터** —
+   같은 계정 workers.dev 주소로 부르면 요청이 정적 파일 쪽으로 새어 404 가 난다(2026-09-13 실측). */
+// 읽기(GET)용 — 보내기와 같은 길(서비스 바인딩 우선)
+async function officeFetchGet(env, pathName){
+  if(!env.ARTCLASS_KEY) return null;
+  const url = String(env.ARTCLASS_URL || 'https://artclass-manager.mandoo0812.workers.dev').replace(/\/$/, '') + pathName;
+  const init = { method:'GET', headers:{ 'X-Gagyebu-Key': env.ARTCLASS_KEY } };
+  if(env.ARTCLASS && typeof env.ARTCLASS.fetch === 'function') return env.ARTCLASS.fetch(new Request(url, init));
+  return fetch(url, init);
+}
+async function officeFetch(env, pathName, bodyObj){
+  const url = String(env.ARTCLASS_URL || 'https://artclass-manager.mandoo0812.workers.dev').replace(/\/$/, '') + pathName;
+  const init = { method:'POST', headers:{ 'Content-Type':'application/json', 'X-Gagyebu-Key': env.ARTCLASS_KEY }, body: JSON.stringify(bodyObj) };
+  if(env.ARTCLASS && typeof env.ARTCLASS.fetch === 'function') return env.ARTCLASS.fetch(new Request(url, init));
+  return fetch(url, init);
+}
+// D1 한 줄 → 저쪽 창구가 받는 모양. 분류는 '운영비|비품·소모품' 을 갈라 넣는다.
+function officeItemOf(row){
+  const cut = String(row.office_cat || '').split('|');
+  const item = {
+    txId: String(row.id), date: String(row.date), amount: Number(row.amount) || 0,
+    group: (cut[0] || '운영비').trim(), category: (cut[1] || cut[0] || '기타').trim(),
+    vendor: String(row.name || ''), memo: String(row.memo || ''),
+    pay: row.card ? '카드' : '', card: String(row.card || ''),
+    by: String(row.user_name || ''), createdAt: String(row.created_at || '')
+  };
+  if(row.installment_id){
+    item.installment = { groupId: String(row.installment_id), no: Number(row.installment_seq) || 1,
+                         total: Number(row.installment_months) || 1, card: String(row.card || ''),
+                         totalAmount: 0, firstDate: String(row.date) };
+  }
+  return item;
+}
+// 보내고 결과를 office_sync/office_doc 에 적는다. 보낼 게 없으면 조용히 끝난다.
+async function officeSend(env, rows){
+  const list = (rows || []).filter(r => r && r.office_dest && !r.deleted_at);
+  if(!list.length) return { sent:0 };
+  if(!officeReady(env)){
+    await officeMark(env, list.map(r => r.id), 'failed:설정 없음(ARTCLASS_URL/KEY)');
+    return { sent:0, err:'설정 없음' };
+  }
+  try{
+    const res = await officeFetch(env, '/gagyebu-expense', { items: list.map(officeItemOf) });
+    const j = await res.json().catch(() => ({}));
+    if(!res.ok && res.status !== 207){
+      await officeMark(env, list.map(r => r.id), 'failed:HTTP ' + res.status);
+      return { sent:0, err:'HTTP ' + res.status };
+    }
+    const okMap = {};
+    (j.docs || []).forEach(d => { okMap[String(d.txId)] = String(d.docId); });
+    const stmts = [];
+    for(const r of list){
+      const doc = okMap[String(r.id)];
+      if(doc) stmts.push(env.DB.prepare(`UPDATE transactions SET office_sync='done', office_doc=?1 WHERE id=?2`).bind(doc, r.id));
+      else    stmts.push(env.DB.prepare(`UPDATE transactions SET office_sync=?1 WHERE id=?2`).bind('failed:저쪽에서 거절', r.id));
+    }
+    if(stmts.length) await env.DB.batch(stmts);
+    return { sent: Object.keys(okMap).length, fails: (j.fails || []).length };
+  }catch(e){
+    await officeMark(env, list.map(r => r.id), 'failed:' + String(e && e.message || e).slice(0, 60));
+    return { sent:0, err:String(e && e.message || e) };
+  }
+}
+async function officeMark(env, ids, mark){
+  try{
+    const stmts = (ids || []).map(id => env.DB.prepare(`UPDATE transactions SET office_sync=?1 WHERE id=?2`).bind(mark, id));
+    if(stmts.length) await env.DB.batch(stmts);
+  }catch(e){}
+}
+// 저쪽에서도 지운다. 가계부에서 지우거나, 사무실 표시를 뗐을 때.
+async function officeDelete(env, ids){
+  const list = (ids || []).map(String).filter(Boolean);
+  if(!list.length || !officeReady(env)) return { ok:false };
+  try{
+    const res = await officeFetch(env, '/gagyebu-expense-del', { txIds: list });
+    if(res.ok || res.status === 207){
+      const stmts = list.map(id => env.DB.prepare(`UPDATE transactions SET office_sync=NULL, office_doc=NULL WHERE id=?1`).bind(id));
+      if(stmts.length) await env.DB.batch(stmts);
+      return { ok:true };
+    }
+    await officeMark(env, list, 'failed:지우기 HTTP ' + res.status);
+    return { ok:false };
+  }catch(e){
+    await officeMark(env, list, 'failed:지우기 ' + String(e && e.message || e).slice(0, 50));
+    return { ok:false };
+  }
+}
+// 못 보낸 것 다시 보내기 — 10분 크론이 부른다. 한 번에 30건까지만(요청 폭주 방지).
+async function officeRetry(env){
+  if(!officeReady(env)) return { tried:0 };
+  const rs = await env.DB.prepare(
+    `SELECT ${TX_COLS} FROM transactions
+      WHERE office_dest IS NOT NULL AND deleted_at IS NULL
+        AND (office_sync IS NULL OR office_sync LIKE 'failed%' OR office_sync='pending')
+      ORDER BY date DESC LIMIT 30`
+  ).all().catch(() => ({ results: [] }));
+  const rows = (rs && rs.results) || [];
+  if(!rows.length) return { tried:0 };
+  const r = await officeSend(env, rows);
+  return { tried: rows.length, sent: r.sent || 0 };
+}
+
 function bgPush(ctx, promise) {
   if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(promise.catch(() => {}));
   return promise.catch(() => {});
@@ -338,6 +446,10 @@ function cleanTx(b) {
       is_recurring: b.is_recurring ? 1 : 0,
       user_name: String(b.user_name ?? '').slice(0, 40),
       card: b.card ? String(b.card).slice(0, 20) : null,   // 카드사(선택). 일시불에도 기록 가능.
+      /* 🏢 사무실 지출 (2026-09-13) — 지출에만 붙는다. 수입에 붙으면 저쪽 장부가 어긋난다.
+         office_dest 는 '보낼 곳'(지금은 'artclass' 하나), office_cat 은 저쪽 분류 원문 '운영비|비품·소모품'. */
+      office_dest: (b.type === 'expense' && b.office_dest) ? String(b.office_dest).slice(0, 20) : null,
+      office_cat:  (b.type === 'expense' && b.office_dest && b.office_cat) ? String(b.office_cat).slice(0, 60) : null,
       // 수정 시 photo_url 키 자체가 없으면 기존 사진을 건드리지 않는다.
       // 목록 응답에 photo_url이 빠져 있어서 앱이 되돌려줄 값을 갖고 있지 않기 때문 —
       // 이걸 구분하지 않으면 거래를 수정할 때마다 첨부한 영수증이 지워진다.
@@ -351,6 +463,7 @@ function cleanTx(b) {
 // 목록엔 "사진이 있냐"만 담고(has_photo), 실제 이미지는 볼 때 /api/tx/:id/photo 로 따로 가져온다.
 const TX_COLS = `id, created_at, date, type, category, name, amount, memo, is_recurring, user_name,
                  card, installment_id, installment_seq, installment_months,
+                 office_dest, office_cat, office_sync, office_doc,
                  (photo_url IS NOT NULL) AS has_photo`;
 
 // 날짜에 add개월을 더하되 그 달에 없는 날은 말일로 맞춘다(1/31 +1개월 → 2/28). 할부 회차 날짜 계산용.
@@ -937,10 +1050,13 @@ export default {
         }
 
         await env.DB.prepare(
-          `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name,card)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,?9,?10)`
-        ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.user_name, tx.card).run();
+          `INSERT INTO transactions (id,date,type,category,name,amount,memo,photo_url,is_recurring,user_name,card,office_dest,office_cat,office_sync)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,?9,?10,?11,?12,?13)`
+        ).bind(id, tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.photo_url, tx.user_name, tx.card,
+               tx.office_dest, tx.office_cat, tx.office_dest ? 'pending' : null).run();
         const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(id).first();
+        // 🏢 사무실용이면 저쪽으로 — 실패해도 가계부 저장은 이미 끝났다(응답을 막지 않는다)
+        if(tx.office_dest) bgPush(ctx, officeSend(env, [row]));
         // 등록되면 두 사람 모두에게 알림. 실패해도 저장은 이미 끝났으므로 응답을 막지 않는다.
         bgPush(ctx, recordAndPush(env, { kind: 'add', name: tx.name, amount: tx.amount, category: tx.category, user_name: tx.user_name, card: tx.card }));
         return json({ tx: row });
@@ -997,6 +1113,15 @@ export default {
           ).bind(crypto.randomUUID(), date, String(b.category), String(b.name), amt, memo, user_name, card, groupId, k, months));
         }
         await env.DB.batch(stmts);
+        /* 🏢 할부도 사무실용이면 회차를 **한 번에** 보낸다(저쪽도 회차별 문서로 쪼개 저장한다 — 구조가 같다). */
+        const _ofDest = b.office_dest ? String(b.office_dest).slice(0, 20) : null;
+        if(_ofDest){
+          const _ofCat = b.office_cat ? String(b.office_cat).slice(0, 60) : null;
+          await env.DB.prepare(`UPDATE transactions SET office_dest=?1, office_cat=?2, office_sync='pending' WHERE installment_id=?3`)
+                      .bind(_ofDest, _ofCat, groupId).run();
+          const _rs = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE installment_id=?1`).bind(groupId).all().catch(() => ({ results: [] }));
+          bgPush(ctx, officeSend(env, (_rs && _rs.results) || []));
+        }
         bgPush(ctx, recordAndPush(env, { kind: 'add', name: `${b.name} (${months}개월 할부)`, amount: total, category: String(b.category), user_name, card }));
         return json({ ok: true, installment_id: groupId, months, monthly_first: base + rem, monthly_rest: base });
       }
@@ -1149,6 +1274,38 @@ export default {
       //  한국 카드는 '쓴 달'과 '통장에서 빠지는 달'이 다르다. 카드마다 이용기간 시작일과 결제일이
       //  달라서, 이 둘을 알아야 "이번 달 실제로 나갈 돈"을 계산할 수 있다.
       //  스키마 변경 없이 app_settings에 JSON 한 덩어리로 둔다(부부가 공유해야 하므로 서버).
+      /* 🏢 (2026-09-13) 사무실 경비가 저쪽(동래연제앱)으로 갔는지 — 설정 화면이 이걸 본다.
+         평소엔 저장하는 즉시 보내므로 0 이어야 정상이고, 0 이 아니면 인터넷·저쪽 사정으로 밀린 것이다. */
+      /* 🏷 (2026-09-13) 사무실 분류 목록 — 저쪽(동래연제)에서 받아온다.
+         저쪽이 안 되면 마지막으로 받아둔 것을, 그것도 없으면 앱에 적힌 기본값을 쓴다(화면이 비지 않게). */
+      if (path === '/api/office/cats' && request.method === 'GET') {
+        try{
+          const res = await officeFetchGet(env, '/gagyebu-expense-cats');
+          if(res && res.ok){
+            const j = await res.json().catch(() => ({}));
+            if(j && j.cats){
+              await setSetting(env, 'office_cats', JSON.stringify(j.cats));
+              return json({ cats: j.cats, from: j.기본값 ? '저쪽 기본값' : '저쪽 설정' });
+            }
+          }
+        }catch(e){}
+        const raw = await getSetting(env, 'office_cats');
+        return json({ cats: raw ? safeParse(raw) : null, from: raw ? '지난번에 받아둔 것' : '없음' });
+      }
+      if (path === '/api/office/status' && request.method === 'GET') {
+        const r = await env.DB.prepare(
+          `SELECT id, date, name, amount, office_sync FROM transactions
+            WHERE office_dest IS NOT NULL AND deleted_at IS NULL
+              AND (office_sync IS NULL OR office_sync = 'pending' OR office_sync LIKE 'failed%')
+            ORDER BY date DESC LIMIT 20`
+        ).all().catch(() => ({ results: [] }));
+        const rows = (r && r.results) || [];
+        return json({ waiting: rows.length, ready: !!(env.ARTCLASS_URL && env.ARTCLASS_KEY), items: rows });
+      }
+      if (path === '/api/office/retry' && request.method === 'POST') {
+        const out = await officeRetry(env);
+        return json({ ok: true, ...out });
+      }
       if (path === '/api/settings/cards' && request.method === 'GET') {
         const raw = await getSetting(env, 'card_settings');
         return json({ cards: raw ? safeParse(raw) : null });
@@ -1324,14 +1481,21 @@ export default {
         const { tx, err } = cleanTx(await request.json().catch(() => ({})));
         if (err) return json({ error: err }, 400);
         // 휴지통에 있는 건 수정 대상이 아니다(deleted_at IS NULL).
+        const _before = await env.DB.prepare(`SELECT office_dest, office_doc FROM transactions WHERE id = ?1`).bind(txId).first();
         const r = await env.DB.prepare(
           `UPDATE transactions SET date=?1, type=?2, category=?3, name=?4, amount=?5, memo=?6, user_name=?7,
-                  photo_url = CASE WHEN ?8 = 1 THEN ?9 ELSE photo_url END, card=?11
+                  photo_url = CASE WHEN ?8 = 1 THEN ?9 ELSE photo_url END, card=?11,
+                  office_dest=?12, office_cat=?13,
+                  office_sync = CASE WHEN ?12 IS NULL THEN NULL ELSE 'pending' END
            WHERE id = ?10 AND deleted_at IS NULL`
         ).bind(tx.date, tx.type, tx.category, tx.name, tx.amount, tx.memo, tx.user_name,
-               tx._setPhoto, tx.photo_url, txId, tx.card).run();
+               tx._setPhoto, tx.photo_url, txId, tx.card, tx.office_dest, tx.office_cat).run();
         if (!r.meta.changes) return json({ error: '수정할 거래를 찾지 못했어요' }, 404);
         const row = await env.DB.prepare(`SELECT ${TX_COLS} FROM transactions WHERE id = ?1`).bind(txId).first();
+        /* 🏢 (2026-09-13) 사무실 표시가 붙었으면 보내고, **떼었으면 저쪽에서 지운다** —
+           안 그러면 집 살림으로 되돌린 지출이 사업 장부에 유령으로 남는다. */
+        if(tx.office_dest) bgPush(ctx, officeSend(env, [row]));
+        else if(_before && _before.office_dest) bgPush(ctx, officeDelete(env, [txId]));
         return json({ tx: row });
       }
 
@@ -1340,7 +1504,7 @@ export default {
       if (txId && request.method === 'DELETE') {
         // 삭제 전 정보를 미리 읽어둔다(알림 문구용). 삭제 후엔 화면에서 사라진다.
         const gone = await env.DB.prepare(
-          `SELECT name, amount, category, user_name, card FROM transactions WHERE id = ?1 AND deleted_at IS NULL`
+          `SELECT name, amount, category, user_name, card, office_dest FROM transactions WHERE id = ?1 AND deleted_at IS NULL`
         ).bind(txId).first();
         const r = await env.DB.prepare(
           `UPDATE transactions SET deleted_at = datetime('now') WHERE id = ?1 AND deleted_at IS NULL`
@@ -1348,6 +1512,7 @@ export default {
         if (!r.meta.changes) return json({ error: '삭제할 거래를 찾지 못했어요' }, 404);
         // 삭제도 두 사람에게 알림.
         if (gone) bgPush(ctx, recordAndPush(env, { kind: 'delete', ...gone }));
+        if (gone && gone.office_dest) bgPush(ctx, officeDelete(env, [txId]));   // 🏢 저쪽에서도 지운다(휴지통에 있는 건 사업 장부에 없어야)
         return json({ ok: true });
       }
 
@@ -1674,6 +1839,8 @@ export default {
       if (r && r.sentAt) console.log('매일 알림 발송:', JSON.stringify(r));
       const v = await runVariableRecurringAlerts(env);
       if (v && v.sent.length) console.log('금액 입력 알림:', JSON.stringify(v));
+      const of = await officeRetry(env);          // 🏢 못 보낸 사무실 지출 다시 보내기
+      if (of && of.tried) console.log('사무실 지출 재시도:', JSON.stringify(of));
     } catch (e) {
       console.warn('스케줄 작업 실패:', String(e?.message || e));
     }

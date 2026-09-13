@@ -1009,6 +1009,18 @@ body {
         </div>
         <div class="settings-item-right">›</div>
       </div>
+      <!-- 🏢 (2026-09-13) 사무실 경비가 동래연제앱으로 갔는지. 평소엔 즉시 보내므로 0 이 정상 —
+           숫자가 보이면 그만큼 밀린 것이고, 눌러서 지금 다시 보낼 수 있다. 0 이면 이 줄은 숨는다. -->
+      <div class="settings-item" id="office-pending-item" style="display:none" onclick="officeRetryNow()">
+        <div class="settings-item-left">
+          <div class="settings-item-icon">🏢</div>
+          <div>
+            <div class="settings-item-text">사무실 경비 — <span id="office-pending-count">0</span>건 아직 못 보냄</div>
+            <div class="settings-item-sub">눌러서 지금 다시 보내기 (10분마다 저절로 다시 보냅니다)</div>
+          </div>
+        </div>
+        <div class="settings-item-right">↻</div>
+      </div>
       <div class="settings-item" onclick="openCarryoverModal()">
         <div class="settings-item-left">
           <div class="settings-item-icon">🧾</div>
@@ -1210,6 +1222,22 @@ body {
         </select>
       </div>
       <div id="installment-hint" style="font-size:12px;color:var(--accent);margin-top:6px;display:none"></div>
+    </div>
+
+    <!-- 🏢 사무실 지출 (2026-09-13) — 여기서 찍으면 동래연제앱 지출에도 자동으로 들어간다.
+         집 살림 합계·예산·리포트에서는 빠지고, 카드 청구액에는 그대로 들어간다(실제로 통장에서 나가니까). -->
+    <div class="form-group" id="office-group">
+      <label class="form-label">어디 쓴 돈인가요?</label>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="type-btn" id="office-btn-home" onclick="setOffice('')">🏠 우리집</button>
+        <button type="button" class="type-btn" id="office-btn-artclass" onclick="setOffice('artclass')">🏢 사무실 경비</button>
+      </div>
+      <div id="office-cat-wrap" style="display:none;margin-top:8px">
+        <select class="form-select" id="tx-office-cat"></select>
+        <div style="font-size:12px;color:var(--text3);margin-top:6px;line-height:1.5">
+          사무실 경비로 찍으면 동래연제앱 💸 지출에도 자동으로 들어가요. 집 살림 합계에서는 빠지고, <b>카드값에는 그대로</b> 들어갑니다.
+        </div>
+      </div>
     </div>
 
     <div class="form-group">
@@ -2225,9 +2253,9 @@ async function saveTotalBudget() {
 // 이번 달 총예산 대비 상태. 기준(쓴/나갈)은 화면 토글을 따른다.
 function totalBudgetState() {
   if (!totalBudget) return null;
-  const items = (catBasis === 'out')
+  const items = homeOnly((catBasis === 'out')            // 🏢 총예산은 집 살림만
     ? outflowTxFor(currentYear, currentMonth)
-    : getMonthTx().filter(t => t.type === 'expense');
+    : getMonthTx().filter(t => t.type === 'expense'));
   const spent = items.reduce((s, t) => s + t.amount, 0);
   const left = totalBudget - spent;
   const pct = Math.round((spent / totalBudget) * 100);
@@ -2623,10 +2651,14 @@ function renderCardBills() {
       ${currentMonth + 1}월에 빠질 카드값이 없어요. 거래를 넣을 때 카드사를 골라주면 여기 잡힙니다.</div>`;
     return;
   }
+  /* 🏢 (2026-09-13) 카드값에는 사무실 지출도 **들어간다**(실제로 통장에서 나가니까 명세서와 맞아야 한다).
+     대신 그중 얼마가 사무실인지 한 줄로 알려준다 — 작업서 결정 1-b. */
+  const _ofInBills = officeSumOf(outflowTxFor(currentYear, currentMonth));
   box.innerHTML = `
     <div style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:10px;text-align:center">
       <div style="font-size:11px;color:var(--text3)">${currentYear}년 ${currentMonth + 1}월에 빠질 카드값 합계</div>
       <div style="font-family:var(--font-mono);font-size:22px;font-weight:700;color:var(--expense);margin-top:4px">${fmtMoney(sum)}</div>
+      ${_ofInBills > 0 ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">이 중 🏢 사무실 경비 ${fmtMoney(_ofInBills)}</div>` : ''}
     </div>
     ${withMoney.map(b => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px">
@@ -3069,18 +3101,54 @@ function getMonthTx() {
   const ms = getMonthStr();
   return transactions.filter(t => t.date.startsWith(ms));
 }
+/* 🏢 (2026-09-13) 사무실 지출은 **우리집 살림 숫자에서 뺀다** — 홈 합계·카테고리 그래프·예산·통계·마감 리포트.
+   거래 목록·달력·엑셀에는 그대로 보인다(어디 썼는지는 봐야 하니까).
+   ⚠️ 카드값(outflowTxFor·monthOutflow·cardBillsForMonth)은 **손대지 않는다** — 실제로 통장에서 나가는 돈이라
+      명세서와 맞아야 한다(작업서 결정 1-b). 대신 카드 화면에 「이 중 🏢 사무실 N원」 한 줄을 따로 보여준다. */
+const isOffice = (t) => !!(t && t.office_dest);
+const homeOnly = (list) => (list || []).filter(t => !t.office_dest);
+const officeSumOf = (list) => (list || []).filter(t => t.office_dest && t.type === 'expense').reduce((a, t) => a + (t.amount || 0), 0);
+/* 목록에서 한눈에 구분되게. 아직 저쪽에 못 보낸 건은 ⏳ 로 표시해 '보낸 줄 알았는데' 를 막는다. */
+function officeBadge(t){
+  if(!t || !t.office_dest) return '';
+  const waiting = !t.office_doc;
+  const cat = String(t.office_cat || '').split('|').pop();
+  return '<span class="badge" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border)" title="'
+       + esc('사무실 경비 · ' + cat + (waiting ? ' · 아직 못 보냄' : ' · 동래연제앱에 들어감')) + '">🏢' + (waiting ? '⏳' : '') + '</span>';
+}
 function getPrevMonthTx() {
   const ms = getPrevMonthStr();
   return transactions.filter(t => t.date.startsWith(ms));
 }
 
 function renderHomePage() {
-  const tx = getMonthTx();
+  const _txAll = getMonthTx();
+  const tx = homeOnly(_txAll);          // 🏢 집 살림만 — 사무실 지출은 아래 한 줄로 따로 보여준다
   const income = tx.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
   const expense = tx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
   const balance = income - expense;
   document.getElementById('home-income').textContent = fmtMoney(income);
+
   document.getElementById('home-expense').textContent = fmtMoney(expense);
+  /* 🏢 (2026-09-13) 집 살림 합계에서 뺀 돈이 얼마인지 **눈에 보이게** 한다 —
+     안 보이면 "이번 달 왜 이렇게 적지?" 하고 숫자를 못 믿게 된다.
+     ⚠️ 금액 칸(#home-expense) 안에 넣으면 다음 줄의 textContent 대입에 지워진다 — **카드(.summary-card)** 에 붙인다. */
+  try{
+    const _ofSum = officeSumOf(_txAll);
+    const _amtEl = document.getElementById('home-expense');
+    const _card = _amtEl && _amtEl.closest('.summary-card');
+    let _ofEl = document.getElementById('home-office-line');
+    if(_ofSum > 0 && _card){
+      if(!_ofEl){
+        _ofEl = document.createElement('div');
+        _ofEl.id = 'home-office-line';
+        _ofEl.style.cssText = 'font-size:11px;color:var(--text3);margin-top:3px;';
+        _card.appendChild(_ofEl);
+      }
+      _ofEl.textContent = '🏢 사무실 경비 ' + fmtMoney(_ofSum) + ' 별도';
+    } else if(_ofEl){ _ofEl.remove(); }
+  }catch(e){}
+
   document.getElementById('home-balance').textContent = fmtMoney(balance);
 
   // Compare
@@ -3336,7 +3404,7 @@ function renderTxItems(items) {
       <div class="tx-icon">${esc(cat.emoji)}</div>
       <div class="tx-info">
         <div class="tx-name">${esc(t.name)}</div>
-        <div class="tx-meta">${esc(cat.label)} ${t.user_name?'· '+esc(t.user_name):''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}${instBadge(t)}${cardBadge(t)}</div>
+        <div class="tx-meta">${esc(cat.label)} ${t.user_name?'· '+esc(t.user_name):''} ${t.is_recurring?'<span class="badge recurring">정기</span>':''}${instBadge(t)}${cardBadge(t)}${officeBadge(t)}</div>
       </div>
       <div class="tx-amount ${t.type==='expense'?'expense':'income'}">${t.type==='expense'?'-':'+'}<span style="font-family:var(--font-mono)">${fmtMoney(t.amount)}</span></div>
       ${hasPhoto(t)?'<div class="tx-has-photo">📷</div>':''}
@@ -3354,7 +3422,7 @@ function renderStatsPage() {
     let m = currentMonth - i, y = currentYear;
     if (m < 0) { m += 12; y--; }
     const ms = `${y}-${String(m+1).padStart(2,'0')}`;
-    const mTx = transactions.filter(t=>t.date.startsWith(ms));
+    const mTx = homeOnly(transactions.filter(t=>t.date.startsWith(ms)));   // 🏢 통계도 집 살림만
     monthLabels.push(`${m+1}월`);
     monthExpenses.push(mTx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0));
     monthIncomes.push(mTx.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0));
@@ -3386,9 +3454,9 @@ function renderStatsPage() {
 function renderBudgetPage() {
   // 홈 막대와 같은 기준을 써야 한다. 예전엔 홈은 [쓴/나갈 기준] 토글을 따르고 여기는 늘 달력이라,
   // 같은 항목이 홈에선 120%, 예산 화면에선 90%로 보였다(어느 쪽이 맞는지 알 수 없었다).
-  const tx = (catBasis === 'out')
+  const tx = homeOnly((catBasis === 'out')               // 🏢 예산도 집 살림만
     ? outflowTxFor(currentYear, currentMonth)
-    : getMonthTx().filter(t=>t.type==='expense');
+    : getMonthTx().filter(t=>t.type==='expense'));
   const monthStr = getMonthStr();
   const catTotals = {};
   tx.forEach(t => { catTotals[t.category]=(catTotals[t.category]||0)+t.amount; });
@@ -3584,6 +3652,7 @@ function openAddModal(tx = null, clone = false) {
   resetQuickBlocks();
   document.getElementById('name-chips').innerHTML = '';
   updateNameSuggestions();
+  initOffice(clone ? null : tx);        // 🏢 수정이면 그 거래 값, 새로 넣거나 복제면 우리집
 
   if (tx && !clone) {
     document.getElementById('add-modal-title').textContent = '거래 수정';
@@ -3626,6 +3695,99 @@ function openAddModal(tx = null, clone = false) {
   // 금액칸을 직접 탭할 때만 키패드가 뜬다.
 }
 
+/* ══════ 🏢 사무실 지출 (2026-09-13) ══════
+   작업서: 0.app/_문서/가계부_사무실지출_연동_작업서.md
+   분류 목록은 동래연제앱 기본값을 그대로 박아 둔다(1단계). 저쪽에서 분류를 늘리면
+   나중에 창구로 받아오면 된다 — 지금 그것까지 하면 단계가 커진다. */
+let OFFICE_CATS = {
+  '운영비': ['임대료','공과금(전기·수도·가스·통신)','비품·소모품','광고·마케팅','세금·수수료','인건비','교재 매입','기타 운영비'],
+  '매입':   ['재료 매입']
+};
+/* 🏷 (2026-09-13) 위 목록은 **저쪽이 안 될 때 쓰는 기본값**이다.
+   평소에는 동래연제앱에서 받아온다 — 거기서 분류를 고치면 여기도 따라 바뀐다.
+   하루 한 번만 물어본다(입력할 때마다 부르면 느려진다). */
+let _officeCatsAt = 0;
+async function loadOfficeCats(force){
+  if(demoMode || !authToken) return;
+  if(!force && Date.now() - _officeCatsAt < 24*60*60*1000) return;
+  try{
+    const r = await api('/office/cats');
+    if(r && r.cats && Object.keys(r.cats).length){
+      OFFICE_CATS = r.cats;
+      _officeCatsAt = Date.now();
+      try{ localStorage.setItem('gy_office_cats', JSON.stringify(r.cats)); }catch(e){}
+    }
+  }catch(e){ /* 못 받아오면 적어둔 것을 그대로 쓴다 */ }
+}
+try{
+  const _c = localStorage.getItem('gy_office_cats');
+  if(_c){ const _p = JSON.parse(_c); if(_p && Object.keys(_p).length) OFFICE_CATS = _p; }
+}catch(e){}
+let currentOffice = '';                      // '' = 우리집, 'artclass' = 동래연제
+const OFFICE_LAST_KEY = 'gy_office_last';    // 마지막에 고른 분류를 기억 — 대개는 저장만 누르면 되게
+
+function renderOfficeCats(pick){
+  const sel = document.getElementById('tx-office-cat');
+  if(!sel) return;
+  const want = pick || localStorage.getItem(OFFICE_LAST_KEY) || '운영비|비품·소모품';
+  sel.innerHTML = Object.keys(OFFICE_CATS).map(g =>
+    '<optgroup label="' + esc(g) + '">' +
+      OFFICE_CATS[g].map(c => {
+        const v = g + '|' + c;
+        return '<option value="' + esc(v) + '"' + (v === want ? ' selected' : '') + '>' + esc(c) + '</option>';
+      }).join('') +
+    '</optgroup>').join('');
+  if(!sel.value) sel.value = '운영비|비품·소모품';
+}
+
+function setOffice(dest){
+  currentOffice = dest || '';
+  if(currentOffice) loadOfficeCats().then(function(){ if(currentOffice) renderOfficeCats(); });   // 🏷 저쪽 목록으로 갱신
+  const on = !!currentOffice;
+  const bh = document.getElementById('office-btn-home'), ba = document.getElementById('office-btn-artclass');
+  if(bh) bh.className = 'type-btn' + (on ? '' : ' active-income');
+  if(ba) ba.className = 'type-btn' + (on ? ' active-expense' : '');
+  const wrap = document.getElementById('office-cat-wrap');
+  if(wrap) wrap.style.display = on ? 'block' : 'none';
+  if(on) renderOfficeCats();
+}
+// 모달을 열 때마다 부른다 — 수정이면 그 거래의 값, 새로 넣는 거면 우리집.
+function initOffice(tx){
+  const dest = (tx && tx.office_dest) ? String(tx.office_dest) : '';
+  setOffice(dest);
+  if(dest) renderOfficeCats((tx && tx.office_cat) || null);
+}
+/* 설정 화면을 열 때·저장 뒤에 부른다. 0 이면 줄 자체를 숨긴다 — 평소엔 보일 일이 없어야 한다. */
+async function refreshOfficePending(){
+  const item = document.getElementById('office-pending-item');
+  if(!item) return;
+  if(demoMode || !authToken){ item.style.display = 'none'; return; }
+  try{
+    const r = await api('/office/status');
+    const n = Number(r && r.waiting) || 0;
+    document.getElementById('office-pending-count').textContent = n;
+    item.style.display = n > 0 ? 'flex' : 'none';
+  }catch(e){ item.style.display = 'none'; }
+}
+async function officeRetryNow(){
+  try{
+    showToast('보내는 중…');
+    const r = await api('/office/retry', { method:'POST' });
+    const sent = Number(r && r.sent) || 0;
+    showToast(sent ? `✅ ${sent}건 보냈어요` : '아직 못 보냈어요 — 잠시 뒤 다시 시도됩니다');
+  }catch(e){ showToast('❌ 다시 보내기 실패: ' + e.message); }
+  await refreshOfficePending();
+  loadData();
+}
+
+function officeFields(){
+  if(!currentOffice || currentTxType !== 'expense') return { office_dest:null, office_cat:null };
+  const sel = document.getElementById('tx-office-cat');
+  const cat = (sel && sel.value) || '운영비|기타 운영비';
+  try{ localStorage.setItem(OFFICE_LAST_KEY, cat); }catch(e){}
+  return { office_dest: currentOffice, office_cat: cat };
+}
+
 function setType(type) {
   currentTxType = type;
   document.getElementById('btn-expense').className = 'type-btn' + (type==='expense'?' active-expense':'');
@@ -3635,6 +3797,12 @@ function setType(type) {
   if (ci) {
     ci.style.display = (type === 'expense') ? 'block' : 'none';
     if (type !== 'expense') { document.getElementById('tx-installment').value = '1'; updateInstallmentHint(); }
+  }
+  // 🏢 사무실 지출도 지출에만. 수입으로 바꾸면 숨기고 우리집으로 되돌린다.
+  const og = document.getElementById('office-group');
+  if (og) {
+    og.style.display = (type === 'expense') ? 'block' : 'none';
+    if (type !== 'expense') setOffice('');
   }
   renderCategoryGrid(type);
 }
@@ -3761,7 +3929,7 @@ ${dup.date} · ${dup.name} · ${fmtMoney(dup.amount)}
   // ── 무이자 할부: 새 지출 등록 때만(수정 아님). '금액'을 총액으로 보고 N개월치를 만든다. ──
   if (months >= 2 && currentTxType === 'expense' && !currentEditTx) {
     if (amount < months) { showToast('할부 총액이 개월수보다 커야 해요'); return; }
-    const payload = { date, card, category: selectedCategory, name, amount, months, memo, user_name: localStorage.getItem('userName') || '' };
+    const payload = { date, card, category: selectedCategory, name, amount, months, memo, user_name: localStorage.getItem('userName') || '', ...officeFields() };
     try {
       if (demoMode) addDemoInstallment(payload);
       else if (authToken) { await api('/installment', { method: 'POST', body: payload }); loadData(); }   // 목록 갱신은 기다리지 않는다
@@ -3781,7 +3949,8 @@ ${dup.date} · ${dup.name} · ${fmtMoney(dup.amount)}
   const tx = {
     date, type: currentTxType, category: selectedCategory,
     name, amount, memo, photo_url: photoUrl, card,
-    is_recurring: false, user_name: localStorage.getItem('userName') || ''
+    is_recurring: false, user_name: localStorage.getItem('userName') || '',
+    ...officeFields()                    // 🏢 사무실용이면 목적지·분류를 같이 보낸다
   };
 
   if (demoMode) {
@@ -4601,6 +4770,7 @@ function switchPage(name) {
   if (name === 'stats') renderStatsPage();
   if (name === 'history') { resetTxSearch(); renderHistoryPage(); }
   if (name === 'calendar') renderCalendarPage();
+  if (name === 'settings') refreshOfficePending();   // 🏢 아직 못 보낸 사무실 경비가 있으면 그때만 한 줄 뜬다
   window.scrollTo(0, 0);
 }
 
@@ -5424,7 +5594,7 @@ async function cancelAlarm() {
 
 // ===== MONTHLY REPORT =====
 function openMonthlyReport() {
-  const tx = getMonthTx();
+  const tx = homeOnly(getMonthTx());    // 🏢 마감 리포트도 집 살림만
   const monthStr = getMonthStr();
   const income = tx.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
   const expense = tx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);

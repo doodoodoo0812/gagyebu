@@ -49,3 +49,11 @@ database_id = "e9475fb8-a10b-4fe5-adee-1e6645b56dab"
 #     npx wrangler secret put APP_PASSWORD     # 부부 공유 비밀번호
 #     npx wrangler secret put SESSION_SECRET   # 세션 토큰 서명키(아무 긴 랜덤 문자열)
 #  APP_PASSWORD를 잊으면 앱에 못 들어간다. SESSION_SECRET을 바꾸면 모든 기기가 로그아웃된다.
+
+# ──────── 🏢 동래연제앱(artclass-manager) 직접 연결 ────────
+#  왜 주소(fetch)가 아니라 바인딩인가 — 워커가 같은 계정의 workers.dev 주소를 부르면
+#  요청이 정적 파일 쪽으로 새어 404 가 난다(2026-09-13 실측: 크론에서는 되고 저장 때는 404).
+#  서비스 바인딩은 내부에서 바로 연결되어 그 함정이 없고 더 빠르다. 키(X-Gagyebu-Key)는 그대로 쓴다.
+[[services]]
+binding = "ARTCLASS"
+service = "artclass-manager"
